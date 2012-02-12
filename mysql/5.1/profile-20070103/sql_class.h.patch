@@ -1,0 +1,12 @@
+--- sql/sql_class.h.orig	2006-04-25 15:02:32.000000000 -0700
++++ sql/sql_class.h	2006-04-25 16:10:47.000000000 -0700
+@@ -1083,6 +1083,9 @@
+   List	     <MYSQL_ERROR> warn_list;
+   uint	     warn_count[(uint) MYSQL_ERROR::WARN_LEVEL_END];
+   uint	     total_warn_count;
++  
++  PROFILING  profiling;
++
+   /*
+     Id of current query. Statement can be reused to execute several queries
+     query_id is global in context of the whole MySQL server.

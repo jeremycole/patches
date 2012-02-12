@@ -1,0 +1,19 @@
+--- sql/mysql_priv.h.orig	2006-04-25 15:02:31.000000000 -0700
++++ sql/mysql_priv.h	2006-04-25 16:20:30.000000000 -0700
+@@ -129,6 +129,8 @@
+ #define BDB_LOG_ALLOC_BLOCK_SIZE	1024
+ #define WARN_ALLOC_BLOCK_SIZE		2048
+ #define WARN_ALLOC_PREALLOC_SIZE	1024
++#define PROFILE_ALLOC_BLOCK_SIZE  2048
++#define PROFILE_ALLOC_PREALLOC_SIZE 1024
+ 
+ /*
+   The following parameters is to decide when to use an extra cache to
+@@ -509,6 +511,7 @@
+ #include "sql_plugin.h"
+ #include "sql_udf.h"
+ #include "sql_partition.h"
++#include "sql_profile.h"
+ 
+ class user_var_entry;
+ class Security_context;

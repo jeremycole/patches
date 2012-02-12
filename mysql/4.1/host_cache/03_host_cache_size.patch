@@ -1,0 +1,169 @@
+===== sql/hostname.cc 1.31 vs edited =====
+--- 1.31/sql/hostname.cc	2005-10-23 21:22:22 -07:00
++++ edited/sql/hostname.cc	2005-10-23 21:25:07 -07:00
+@@ -83,7 +83,7 @@
+  bool hostname_cache_init()
+  {
+   DBUG_ENTER("hostname_cache_init");
+-  if (!(hostname_cache= new hash_filo(HOST_CACHE_SIZE, 0, 0,
++  if (!(hostname_cache= new hash_filo(host_cache_size, 0, 0,
+                                       (hash_get_key) host_entry_get_key,
+                                       (hash_free_key) host_entry_free_key,
+                                       &my_charset_latin1)))
+@@ -124,6 +124,19 @@
+ }
+ 
+ /*
++  Resize the hostname cache by resizing the hash table underlying it.
++  
++  SYNOPSIS
++    hostname_cache_resize()
++      size                new size of the hostname cache
++*/
++void hostname_cache_resize(uint size)
++{
++  hostname_cache->resize(size);
++}
++
++
++/*
+   Adds an entry in the hostname cache for an IP address stored in 'in'
+   and a hostname 'name'.
+ 
+@@ -136,7 +149,7 @@
+ {
+   DBUG_ENTER("hostname_cache_add");
+   
+-  if (likely(!(specialflag & SPECIAL_NO_HOST_CACHE)))
++   if (likely(host_cache_size > 0))
+    {
+     VOID(pthread_mutex_lock(&hostname_cache->lock));
+     host_entry *entry;
+@@ -259,7 +272,7 @@
+   /*
+     Check the hostname cache for this IP address first.
+   */
+-  if (!(specialflag & SPECIAL_NO_HOST_CACHE))
++  if (likely(host_cache_size > 0))
+   {
+     host_entry *entry;
+     VOID(pthread_mutex_lock(&hostname_cache->lock));
+===== sql/mysql_priv.h 1.369 vs edited =====
+--- 1.369/sql/mysql_priv.h	2005-10-23 21:22:23 -07:00
++++ edited/sql/mysql_priv.h	2005-10-23 21:23:40 -07:00
+@@ -926,6 +926,7 @@
+ extern ulong com_stmt_reset, com_stmt_close;
+ extern ulong specialflag, current_pid;
+ extern ulong expire_logs_days, sync_binlog_period, sync_binlog_counter;
++extern ulong host_cache_size;
+ extern my_bool relay_log_purge, opt_innodb_safe_binlog;
+ extern uint test_flags,select_errors,ha_open_options;
+ extern uint protocol_version, mysqld_port, dropping_tables;
+@@ -1142,6 +1143,7 @@
+ void hostname_cache_inc_errors(struct in_addr *in);
+ void hostname_cache_reset_errors(struct in_addr *in);
+ bool hostname_cache_init();
++void hostname_cache_resize(uint size);
+ void hostname_cache_free();
+ void hostname_cache_refresh(void);
+ 
+===== sql/mysqld.cc 1.604 vs edited =====
+--- 1.604/sql/mysqld.cc	2005-10-18 09:45:09 -07:00
++++ edited/sql/mysqld.cc	2005-10-23 21:23:40 -07:00
+@@ -309,6 +309,7 @@
+ uint lower_case_table_names;
+ uint opt_crash_binlog_innodb;
+ uint volatile thread_count, thread_running, kill_cached_threads, wake_thread;
++ulong host_cache_size;
+ ulong back_log, connect_timeout, concurrency;
+ ulong server_id, thd_startup_options;
+ ulong table_cache_size, thread_stack, thread_stack_min, what_to_log;
+@@ -4250,7 +4251,7 @@
+   OPT_SLAVE_NET_TIMEOUT, OPT_SLAVE_COMPRESSED_PROTOCOL, OPT_SLOW_LAUNCH_TIME,
+   OPT_SLAVE_TRANS_RETRIES, OPT_READONLY, OPT_DEBUGGING,
+   OPT_SORT_BUFFER, OPT_TABLE_CACHE,
+-  OPT_THREAD_CONCURRENCY, OPT_THREAD_CACHE_SIZE,
++  OPT_THREAD_CONCURRENCY, OPT_THREAD_CACHE_SIZE, OPT_HOST_CACHE_SIZE,
+   OPT_TMP_TABLE_SIZE, OPT_THREAD_STACK,
+   OPT_WAIT_TIMEOUT, OPT_MYISAM_REPAIR_THREADS,
+   OPT_INNODB_MIRRORED_LOG_GROUPS,
+@@ -5454,6 +5455,10 @@
+    "How many threads we should keep in a cache for reuse.",
+    (gptr*) &thread_cache_size, (gptr*) &thread_cache_size, 0, GET_ULONG,
+    REQUIRED_ARG, 0, 0, 16384, 0, 1, 0},
++  {"host_cache_size", OPT_HOST_CACHE_SIZE,
++   "How many hostnames should be cached to avoid resolving.",
++   (gptr*) &host_cache_size, (gptr*) &host_cache_size, 0, GET_ULONG,
++   REQUIRED_ARG, HOST_CACHE_SIZE, 0, 2048, 0, 1, 0},
+   {"thread_concurrency", OPT_THREAD_CONCURRENCY,
+    "Permits the application to give the threads system a hint for the desired number of threads that should be run at the same time.",
+    (gptr*) &concurrency, (gptr*) &concurrency, 0, GET_ULONG, REQUIRED_ARG,
+===== sql/set_var.cc 1.178 vs edited =====
+--- 1.178/sql/set_var.cc	2005-09-20 15:18:26 -07:00
++++ edited/sql/set_var.cc	2005-10-23 21:26:05 -07:00
+@@ -356,6 +356,8 @@
+ 					     &table_cache_size);
+ sys_var_long_ptr	sys_thread_cache_size("thread_cache_size",
+ 					      &thread_cache_size);
++sys_var_host_cache_size sys_host_cache_size("host_cache_size",
++                                            &host_cache_size);
+ sys_var_thd_enum	sys_tx_isolation("tx_isolation",
+ 					 &SV::tx_isolation,
+ 					 &tx_isolation_typelib,
+@@ -539,6 +541,7 @@
+   &sys_foreign_key_checks,
+   &sys_group_concat_max_len,
+   &sys_have_innodb,
++  &sys_host_cache_size,
+   &sys_identity,
+   &sys_init_connect,
+   &sys_init_slave,
+@@ -728,6 +731,7 @@
+   {"have_raid",		      (char*) &have_raid,		    SHOW_HAVE},
+   {"have_rtree_keys",         (char*) &have_rtree_keys,             SHOW_HAVE},
+   {"have_symlink",            (char*) &have_symlink,                SHOW_HAVE},
++  {sys_host_cache_size.name,  (char*) &sys_host_cache_size,         SHOW_SYS},
+   {"init_connect",            (char*) &sys_init_connect,            SHOW_SYS},
+   {"init_file",               (char*) &opt_init_file,               SHOW_CHAR_PTR},
+   {"init_slave",              (char*) &sys_init_slave,              SHOW_SYS},
+@@ -2163,6 +2167,21 @@
+  }
+ }
+ 
++bool sys_var_host_cache_size::update(THD *thd, set_var *var)
++{
++  int new_size= var->value->val_int();
++  
++  if(new_size < 0 || new_size > 2048) {
++    my_error(ER_WRONG_VALUE_FOR_VAR, MYF(0),
++             sys_host_cache_size.name, "bad value");
++    return -1;
++  }
++  
++  host_cache_size= (ulong) new_size;
++  hostname_cache_resize((uint)host_cache_size);
++  
++  return 0;
++}
+ 
+ LEX_STRING default_key_cache_base= {(char *) "default", 7 };
+ 
+===== sql/set_var.h 1.59 vs edited =====
+--- 1.59/sql/set_var.h	2005-07-15 12:43:48 -07:00
++++ edited/sql/set_var.h	2005-10-23 21:23:40 -07:00
+@@ -640,6 +640,15 @@
+ };
+ 
+ 
++class sys_var_host_cache_size :public sys_var_long_ptr
++{
++public:
++  sys_var_host_cache_size(const char *name_arg, ulong *value_ptr)
++    :sys_var_long_ptr(name_arg, value_ptr) {}
++  bool update(THD *thd, set_var *var);
++};
++
++
+ class sys_var_key_buffer_size :public sys_var_key_cache_param
+ {
+ public:

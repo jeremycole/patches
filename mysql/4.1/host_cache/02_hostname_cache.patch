@@ -1,0 +1,581 @@
+===== sql/hostname.cc 1.30 vs edited =====
+--- 1.30/sql/hostname.cc	2005-09-02 17:06:58 -07:00
++++ edited/sql/hostname.cc	2005-10-23 21:09:33 -07:00
+@@ -16,8 +16,9 @@
+ 
+ 
+ /*
+-  Get hostname for an IP.  Hostnames are checked with reverse name lookup and
+-  checked that they doesn't resemble an ip.
++  Get hostname for an IP.  Hostnames are then checked with forward lookup
++  to see that they match the IP address, and checked that they don't 
++  resemble an IP address.
+ */
+ 
+ #include "mysql_priv.h"
+@@ -41,93 +42,178 @@
+ class host_entry :public hash_filo_element
+ {
+ public:
+-  char	 ip[sizeof(((struct in_addr *) 0)->s_addr)];
++  uint32 ip;
+   uint	 errors;
+   char	 *hostname;
+ };
+ 
+ static hash_filo *hostname_cache;
+-static pthread_mutex_t LOCK_hostname;
+ 
+-void hostname_cache_refresh()
+-{
+-  hostname_cache->clear();
++/*
++  A simple inline function to return the hash key for a given entry.
++*/
++static inline byte *host_entry_get_key(host_entry *entry, uint *length,
++                                       my_bool not_used __attribute__((unused)))
++ {
++  *length= sizeof(uint32);
++  return (byte *) &entry->ip;
+ }
+ 
+-bool hostname_cache_init()
++/*
++  A simple inline function to free a hash entry.
++*/
++static inline void host_entry_free_key(host_entry *entry)
+ {
+-  host_entry tmp;
+-  uint offset= (uint) ((char*) (&tmp.ip) - (char*) &tmp);
+-  if (!(hostname_cache=new hash_filo(HOST_CACHE_SIZE, offset,
+-				     sizeof(struct in_addr),NULL,
+-				     (hash_free_key) free,
+-				     &my_charset_latin1)))
+-    return 1;
+-  hostname_cache->clear();
+-  (void) pthread_mutex_init(&LOCK_hostname,MY_MUTEX_INIT_SLOW);
+-  return 0;
++  my_free(entry->hostname, MYF(0));
++  my_free((byte *) entry, MYF(0));
+ }
+ 
+-void hostname_cache_free()
++/*
++  Initializes the hash structure for the hostname cache.  Should be
++  called while the server is running single-threaded, before accepting
++  any connections.
++  
++  SYNOPSIS
++    hostname_cache_init()
++    
++  RETURN
++    0   ok
++    1   error
++*/
++ bool hostname_cache_init()
++ {
++  DBUG_ENTER("hostname_cache_init");
++  if (!(hostname_cache= new hash_filo(HOST_CACHE_SIZE, 0, 0,
++                                      (hash_get_key) host_entry_get_key,
++                                      (hash_free_key) host_entry_free_key,
++                                      &my_charset_latin1)))
++    DBUG_RETURN(1);
++  hostname_cache->clear();
++  DBUG_RETURN(0);
++ }
++
++/*
++  Cleans up the hash structure for the hostname cache.  Should be called
++  after stopping accepting connections, before shutting down.
++  
++  SYNOPSIS
++    hostname_cache_free()
++*/
++ void hostname_cache_free()
++ {
++  DBUG_ENTER("hostname_cache_free");
++   if (hostname_cache)
++   {
++     delete hostname_cache;
++     hostname_cache= 0;
++   }
++  DBUG_VOID_RETURN;
++ }
++
++/*
++  Empty the contents of the hostname cache.
++  
++  SYNOPSIS
++    hostname_cache_refresh()
++*/
++void hostname_cache_refresh()
+ {
+-  if (hostname_cache)
+-  {
+-    (void) pthread_mutex_destroy(&LOCK_hostname);
+-    delete hostname_cache;
+-    hostname_cache= 0;
+-  }
++  DBUG_ENTER("hostname_cache_refresh");
++  hostname_cache->clear();
++  DBUG_VOID_RETURN;
+ }
+ 
+-
+-static void add_hostname(struct in_addr *in,const char *name)
++/*
++  Adds an entry in the hostname cache for an IP address stored in 'in'
++  and a hostname 'name'.
++
++  SYNOPSIS
++    hostname_cache_add(in, name)
++      in                  pointer to struct in_addr with IP address
++      name                string with hostname associated to IP address
++*/
++static void hostname_cache_add(struct in_addr *in, const char *name)
+ {
+-  if (!(specialflag & SPECIAL_NO_HOST_CACHE))
+-  {
++  DBUG_ENTER("hostname_cache_add");
++  
++  if (likely(!(specialflag & SPECIAL_NO_HOST_CACHE)))
++   {
+     VOID(pthread_mutex_lock(&hostname_cache->lock));
+     host_entry *entry;
+-    if (!(entry=(host_entry*) hostname_cache->search((gptr) &in->s_addr,0)))
++    if (!(entry= (host_entry*) hostname_cache->search((gptr) &in->s_addr, 0)))
+     {
+-      uint length=name ? (uint) strlen(name) : 0;
+-
+-      if ((entry=(host_entry*) malloc(sizeof(host_entry)+length+1)))
++      if ((entry= (host_entry*) my_malloc(sizeof(host_entry),
++                                          MYF(MY_WME|MY_ZEROFILL))))
+       {
+-	char *new_name;
+-	memcpy_fixed(&entry->ip, &in->s_addr, sizeof(in->s_addr));
+-	if (length)
+-	  memcpy(new_name= (char *) (entry+1), name, length+1);
+-	else
+-	  new_name=0;
+-	entry->hostname=new_name;
+-	entry->errors=0;
+-	(void) hostname_cache->add(entry);
+-      }
+-    }
+-    VOID(pthread_mutex_unlock(&hostname_cache->lock));
+-  }
++        entry->ip = (uint32)in->s_addr;
++        if (name[0] != '\0')
++          entry->hostname= my_strdup(name, MYF(0));
++        (void) hostname_cache->add(entry);
++       }
++     }
++     VOID(pthread_mutex_unlock(&hostname_cache->lock));
++   }
++  DBUG_VOID_RETURN;
+ }
+ 
+ 
+-inline void add_wrong_ip(struct in_addr *in)
++
++/*
++  Add a denied IP address to the hostname cache, so it can be quickly
++  denied in the future.
++  
++  SYNOPSIS
++    hostname_cache_add_deny()
++      in                  pointer to struct in_addr with IP address    
++*/
++inline void hostname_cache_add_deny(struct in_addr *in)
+ {
+-  add_hostname(in,NullS);
++  DBUG_ENTER("hostname_cache_add_deny");
++  hostname_cache_add(in, NullS);
++  DBUG_VOID_RETURN;
+ }
+ 
+-void inc_host_errors(struct in_addr *in)
++
++/*
++  Increment the error count for an IP address.
++  
++  SYNOPSIS
++    hostname_cache_inc_errors()
++      in                  pointer to struct in_addr with IP address
++*/
++void hostname_cache_inc_errors(struct in_addr *in)
+ {
++  DBUG_ENTER("hostname_cache_inc_errors");
++  
+   VOID(pthread_mutex_lock(&hostname_cache->lock));
+   host_entry *entry;
+-  if ((entry=(host_entry*) hostname_cache->search((gptr) &in->s_addr,0)))
++  if ((entry=(host_entry*) hostname_cache->search((gptr) &in->s_addr, 0)))
+     entry->errors++;
+   VOID(pthread_mutex_unlock(&hostname_cache->lock));
++  
++  DBUG_VOID_RETURN;
+ }
+ 
+-void reset_host_errors(struct in_addr *in)
++
++
++/*
++  Reset the error count for an IP address.
++  
++  SYNOPSIS
++    hostname_cache_reset_errors()
++      in                  pointer to struct in_addr with IP address
++*/
++void hostname_cache_reset_errors(struct in_addr *in)
+ {
++  DBUG_ENTER("hostname_cache_reset_errors");
++  
+   VOID(pthread_mutex_lock(&hostname_cache->lock));
+   host_entry *entry;
+-  if ((entry=(host_entry*) hostname_cache->search((gptr) &in->s_addr,0)))
++  if ((entry=(host_entry*) hostname_cache->search((gptr) &in->s_addr, 0)))
+     entry->errors=0;
+   VOID(pthread_mutex_unlock(&hostname_cache->lock));
++  
++  DBUG_VOID_RETURN;
+ }
+ 
+ /* Deal with systems that don't defined INADDR_LOOPBACK */
+@@ -135,28 +221,54 @@
+ #define INADDR_LOOPBACK 0x7f000001UL
+ #endif
+ 
++/*
++  Double reverse resolve an IP address and return the hostname and
++  a count of errors seen from this IP address.  Cache successes
++  and failures using hostname_cache API.
++  
++  SYNOPSIS
++    ip_to_hostname()
++      in                  struct in_addr with IP address to resolve
++      errors              pointer to uint to fill in with count of errors
++    
++  NOTES
++    - This is called before accepting a connection, so that MySQL
++      has access to the hostname for checking GRANTs.
++    - The results are kept in a cache (hostname_cache) for future
++      lookups.
++      
++  RETURN
++    0   The IP address couldn't be resolved or verified, and a connection
++        shouldn't be accepted from this IP address.
++    *   The hostname corresponding to the IP address is returned.
++    
++*/
++
+ my_string ip_to_hostname(struct in_addr *in, uint *errors)
+ {
+-  uint i;
+-  host_entry *entry;
++  char *name;
+   DBUG_ENTER("ip_to_hostname");
+   *errors= 0;
+ 
+-  /* We always treat the loopback address as "localhost". */
++  /*
++    We always treat the loopback address as "localhost".
++  */
+   if (in->s_addr == htonl(INADDR_LOOPBACK))
+     DBUG_RETURN((char *)my_localhost);
+ 
+-  /* Check first if we have name in cache */
++  /*
++    Check the hostname cache for this IP address first.
++  */
+   if (!(specialflag & SPECIAL_NO_HOST_CACHE))
+   {
++    host_entry *entry;
+     VOID(pthread_mutex_lock(&hostname_cache->lock));
+-    if ((entry=(host_entry*) hostname_cache->search((gptr) &in->s_addr,0)))
++    if ((entry= (host_entry *) hostname_cache->search((gptr) &in->s_addr, 0)))
+     {
+-      char *name;
+       if (!entry->hostname)
+-	name=0;					// Don't allow connection
++        name=0;					// Don't allow connection
+       else
+-	name=my_strdup(entry->hostname,MYF(0));
++        name= my_strdup(entry->hostname, MYF(0));
+       *errors= entry->errors;
+       VOID(pthread_mutex_unlock(&hostname_cache->lock));
+       DBUG_RETURN(name);
+@@ -164,111 +276,113 @@
+     VOID(pthread_mutex_unlock(&hostname_cache->lock));
+   }
+ 
+-  struct hostent *hp, *check;
+-  char *name;
+-  LINT_INIT(check);
+-#if defined(HAVE_GETHOSTBYADDR_R) && defined(HAVE_SOLARIS_STYLE_GETHOST)
+-  char buff[GETHOSTBYADDR_BUFF_SIZE],buff2[GETHOSTBYNAME_BUFF_SIZE];
++  /*
++    The IP didn't exist in the hostname cache, we need to resolve it.
++  */
++  
++  struct hostent *reverse, *forward;
++  struct hostent he_reverse, he_forward;
++  char buf_reverse[GETHOSTBYADDR_BUFF_SIZE];
++  char buf_forward[GETHOSTBYNAME_BUFF_SIZE];
+   int tmp_errno;
+-  struct hostent tmp_hostent, tmp_hostent2;
+-#ifdef HAVE_purify
+-  bzero(buff,sizeof(buff));		// Bug in purify
+-#endif
+-  if (!(hp=gethostbyaddr_r((char*) in,sizeof(*in),
+-			   AF_INET,
+-			   &tmp_hostent,buff,sizeof(buff),&tmp_errno)))
+-  {
+-    DBUG_PRINT("error",("gethostbyaddr_r returned %d",tmp_errno));
++
++  /*
++    Reverse resolve the IP address.
++  */
++  if (!(reverse= my_gethostbyaddr_r((char*) in, sizeof(*in),
++                                    AF_INET, &he_reverse, 
++			                              buf_reverse, sizeof(buf_reverse),
++			                              &tmp_errno)))
++  {
++    DBUG_PRINT("error", ("In reverse lookup: my_gethostbyaddr_r returned %d",
++                         tmp_errno));
++    my_gethostbyaddr_r_free();
+     return 0;
+   }
+-  if (!(check=my_gethostbyname_r(hp->h_name,&tmp_hostent2,buff2,sizeof(buff2),
+-				 &tmp_errno)))
++
++  /*
++    Check that we got some hostname back, fail if we got an empty one.
++  */
++  if (!reverse->h_name[0])
++  {
++    DBUG_PRINT("error", ("Got an empty hostname from reverse lookup"));
++    hostname_cache_add_deny(in);
++    my_gethostbyaddr_r_free();
++    DBUG_RETURN(0);				// Don't allow empty hostnames
++  }
++  
++  /*
++    Copy the hostname we got back, so that we can call my_gethostbyaddr_r_free.
++  */
++  if (!(name= my_strdup(reverse->h_name, MYF(0))))
+   {
+-    DBUG_PRINT("error",("gethostbyname_r returned %d",tmp_errno));
++    my_gethostbyaddr_r_free();
++    DBUG_RETURN(0);				// out of memory
++  }
++  my_gethostbyaddr_r_free();
++
++  /*
++    Forward resolve the hostname we got from the above reverse resolve.
++  */
++  if (!(forward= my_gethostbyname_r(reverse->h_name, &he_forward,
++                                    buf_forward, sizeof(buf_forward),
++                                    &tmp_errno)))
++  {
++    DBUG_PRINT("error", ("In forward lookup: my_gethostbyname_r returned %d",
++                         tmp_errno));
+     /*
+-      Don't cache responses when the DSN server is down, as otherwise
++      Don't cache responses when the DNS server is down, as otherwise
+       transient DNS failure may leave any number of clients (those
+       that attempted to connect during the outage) unable to connect
+       indefinitely.
+     */
+     if (tmp_errno == HOST_NOT_FOUND || tmp_errno == NO_DATA)
+-      add_wrong_ip(in);
+-    my_gethostbyname_r_free();
+-    DBUG_RETURN(0);
+-  }
+-  if (!hp->h_name[0])
+-  {
+-    DBUG_PRINT("error",("Got an empty hostname"));
+-    add_wrong_ip(in);
+-    my_gethostbyname_r_free();
+-    DBUG_RETURN(0);				// Don't allow empty hostnames
+-  }
+-  if (!(name=my_strdup(hp->h_name,MYF(0))))
+-  {
++      hostname_cache_add_deny(in);
++    my_free(name, MYF(0));
+     my_gethostbyname_r_free();
+-    DBUG_RETURN(0);				// out of memory
+-  }
+-  my_gethostbyname_r_free();
+-#else
+-  VOID(pthread_mutex_lock(&LOCK_hostname));
+-  if (!(hp=gethostbyaddr((char*) in,sizeof(*in), AF_INET)))
+-  {
+-    VOID(pthread_mutex_unlock(&LOCK_hostname));
+-    DBUG_PRINT("error",("gethostbyaddr returned %d",errno));
+-
+-    if (errno == HOST_NOT_FOUND || errno == NO_DATA)
+-      goto add_wrong_ip_and_return;
+-    /* Failure, don't cache responce */
+     DBUG_RETURN(0);
+   }
+-  if (!hp->h_name[0])				// Don't allow empty hostnames
+-  {
+-    VOID(pthread_mutex_unlock(&LOCK_hostname));
+-    DBUG_PRINT("error",("Got an empty hostname"));
+-    goto add_wrong_ip_and_return;
+-  }
+-  if (!(name=my_strdup(hp->h_name,MYF(0))))
+-  {
+-    VOID(pthread_mutex_unlock(&LOCK_hostname));
+-    DBUG_RETURN(0);				// out of memory
+-  }
+-  check=gethostbyname(name);
+-  VOID(pthread_mutex_unlock(&LOCK_hostname));
+-  if (!check)
+-  {
+-    DBUG_PRINT("error",("gethostbyname returned %d",errno));
+-    my_free(name,MYF(0));
+-    DBUG_RETURN(0);
+-  }
+-#endif
+ 
+-  /* Don't accept hostnames that starts with digits because they may be
+-     false ip:s */
+-  if (my_isdigit(&my_charset_latin1,name[0]))
++  /*
++    Don't accept hostnames that start with digits because they may be
++    false IP addresses.
++  */
++  if (my_isdigit(&my_charset_latin1, name[0]))
+   {
+     char *pos;
+-    for (pos= name+1 ; my_isdigit(&my_charset_latin1,*pos); pos++) ;
++    for (pos= name+1 ; my_isdigit(&my_charset_latin1, *pos); pos++) ;
+     if (*pos == '.')
+     {
+-      DBUG_PRINT("error",("mysqld doesn't accept hostnames that starts with a number followed by a '.'"));
+-      my_free(name,MYF(0));
+-      goto add_wrong_ip_and_return;
++      DBUG_PRINT("error", ("mysqld doesn't accept hostnames that starts with a number followed by a '.'"));
++      goto cache_failure_and_return;
+     }
+   }
+ 
+-  /* Check that 'gethostbyname' returned the used ip */
+-  for (i=0; check->h_addr_list[i]; i++)
++  /*
++    Check that the IP is contained in the list of returned IPs from
++    the forward resolve above.  If so, cache it so that we don't have
++    to resolve it again in the future.  If not, the connection will be
++    denied after finishing this loop.
++  */
++  for (uint i=0; forward->h_addr_list[i]; i++)
+   {
+-    if (*(uint32*)(check->h_addr_list)[i] == in->s_addr)
++    if (*(uint32*)(forward->h_addr_list)[i] == in->s_addr)
+     {
+-      add_hostname(in,name);
++      hostname_cache_add(in, name);
++      my_gethostbyname_r_free();
+       DBUG_RETURN(name);
+     }
+   }
+-  DBUG_PRINT("error",("Couldn't verify hostname with gethostbyname"));
+-  my_free(name,MYF(0));
+-
+-add_wrong_ip_and_return:
+-  add_wrong_ip(in);
++  
++  /*
++    Something about this IP address is wrong, and the connection will
++    be denied.  In addition, we'll cache this result, so that we can
++    deny future connections from the same IP address much faster.
++  */
++ cache_failure_and_return:
++  DBUG_PRINT("error", ("Double reverse DNS lookup failed for IP, connection will be denied."));
++  my_gethostbyname_r_free();
++  my_free(name, MYF(0));
++  hostname_cache_add_deny(in);
+   DBUG_RETURN(0);
+ }
+===== sql/mysql_priv.h 1.368 vs edited =====
+--- 1.368/sql/mysql_priv.h	2005-09-30 04:21:34 -07:00
++++ edited/sql/mysql_priv.h	2005-10-23 20:47:08 -07:00
+@@ -1139,8 +1139,8 @@
+ /* from hostname.cc */
+ struct in_addr;
+ my_string ip_to_hostname(struct in_addr *in,uint *errors);
+-void inc_host_errors(struct in_addr *in);
+-void reset_host_errors(struct in_addr *in);
++void hostname_cache_inc_errors(struct in_addr *in);
++void hostname_cache_reset_errors(struct in_addr *in);
+ bool hostname_cache_init();
+ void hostname_cache_free();
+ void hostname_cache_refresh(void);
+===== sql/sql_parse.cc 1.471 vs edited =====
+--- 1.471/sql/sql_parse.cc	2005-10-10 10:22:50 -07:00
++++ edited/sql/sql_parse.cc	2005-10-23 20:47:08 -07:00
+@@ -294,7 +294,7 @@
+     if (send_old_password_request(thd) ||
+         my_net_read(net) != SCRAMBLE_LENGTH_323 + 1) // We have to read very
+     {                                                // specific packet size
+-      inc_host_errors(&thd->remote.sin_addr);
++      hostname_cache_inc_errors(&thd->remote.sin_addr);
+       DBUG_RETURN(ER_HANDSHAKE_ERROR);
+     }
+     /* Final attempt to check the user based on reply */
+@@ -777,7 +777,7 @@
+ 	(pkt_len= my_net_read(net)) == packet_error ||
+ 	pkt_len < MIN_HANDSHAKE_SIZE)
+     {
+-      inc_host_errors(&thd->remote.sin_addr);
++      hostname_cache_inc_errors(&thd->remote.sin_addr);
+       return(ER_HANDSHAKE_ERROR);
+     }
+   }
+@@ -785,7 +785,7 @@
+ #include "_cust_sql_parse.h"
+ #endif
+   if (connect_errors)
+-    reset_host_errors(&thd->remote.sin_addr);
++    hostname_cache_reset_errors(&thd->remote.sin_addr);
+   if (thd->packet.alloc(thd->variables.net_buffer_length))
+     return(ER_OUT_OF_RESOURCES);
+ 
+@@ -851,7 +851,7 @@
+     /* Do the SSL layering. */
+     if (!ssl_acceptor_fd)
+     {
+-      inc_host_errors(&thd->remote.sin_addr);
++      hostname_cache_inc_errors(&thd->remote.sin_addr);
+       return(ER_HANDSHAKE_ERROR);
+     }
+     DBUG_PRINT("info", ("IO layer change in progress..."));
+@@ -859,7 +859,7 @@
+     {
+       DBUG_PRINT("error", ("Failed to read user information (pkt_len= %lu)",
+ 			   pkt_len));
+-      inc_host_errors(&thd->remote.sin_addr);
++      hostname_cache_inc_errors(&thd->remote.sin_addr);
+       return(ER_HANDSHAKE_ERROR);
+     }
+     DBUG_PRINT("info", ("Reading user information over SSL layer"));
+@@ -868,7 +868,7 @@
+     {
+       DBUG_PRINT("error", ("Failed to read user information (pkt_len= %lu)",
+ 			   pkt_len));
+-      inc_host_errors(&thd->remote.sin_addr);
++      hostname_cache_inc_errors(&thd->remote.sin_addr);
+       return(ER_HANDSHAKE_ERROR);
+     }
+   }
+@@ -876,7 +876,7 @@
+ 
+   if (end >= (char*) net->read_pos+ pkt_len +2)
+   {
+-    inc_host_errors(&thd->remote.sin_addr);
++    hostname_cache_inc_errors(&thd->remote.sin_addr);
+     return(ER_HANDSHAKE_ERROR);
+   }
+ 

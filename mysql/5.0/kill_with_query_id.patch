@@ -1,0 +1,233 @@
+diff -Nur -x bdb mysql-5.0.26/client/mysql_priv.h mysql-5.0.26.kill_query/client/mysql_priv.h
+--- mysql-5.0.26/client/mysql_priv.h	2006-10-04 04:24:43.000000000 -0700
++++ mysql-5.0.26.kill_query/client/mysql_priv.h	2006-10-23 18:38:33.000000000 -0700
+@@ -83,7 +83,7 @@
+ 			       CHARSET_INFO *from_cs,
+ 			       uint32 max_res_length,
+ 			       CHARSET_INFO *to_cs, uint32 *result_length);
+-void kill_one_thread(THD *thd, ulong id, bool only_kill_query);
++void kill_one_thread(THD *thd, ulong id, query_id_t query_id, bool only_kill_query);
+ bool net_request_file(NET* net, const char* fname);
+ char* query_table_status(THD *thd,const char *db,const char *table_name);
+ 
+diff -Nur -x bdb mysql-5.0.26/sql/mysql_priv.h mysql-5.0.26.kill_query/sql/mysql_priv.h
+--- mysql-5.0.26/sql/mysql_priv.h	2006-10-04 04:24:43.000000000 -0700
++++ mysql-5.0.26.kill_query/sql/mysql_priv.h	2006-10-23 18:38:33.000000000 -0700
+@@ -83,7 +83,7 @@
+ 			       CHARSET_INFO *from_cs,
+ 			       uint32 max_res_length,
+ 			       CHARSET_INFO *to_cs, uint32 *result_length);
+-void kill_one_thread(THD *thd, ulong id, bool only_kill_query);
++void kill_one_thread(THD *thd, ulong id, query_id_t query_id, bool only_kill_query);
+ bool net_request_file(NET* net, const char* fname);
+ char* query_table_status(THD *thd,const char *db,const char *table_name);
+ 
+diff -Nur -x bdb mysql-5.0.26/sql/share/errmsg.txt mysql-5.0.26.kill_query/sql/share/errmsg.txt
+--- mysql-5.0.26/sql/share/errmsg.txt	2006-10-04 04:24:10.000000000 -0700
++++ mysql-5.0.26.kill_query/sql/share/errmsg.txt	2006-10-24 15:53:26.000000000 -0700
+@@ -5633,4 +5633,6 @@
+ 	eng "String '%-.70s' is too long for %s (should be no longer than %d)"
+ ER_NON_INSERTABLE_TABLE  
+ 	eng "The target table %-.100s of the %s is not insertable-into"
++ER_KILL_QUERY_ID_MISMATCH
++        eng "Cannot kill thread %lu, Query ID mismatch"
+ 
+diff -Nur -x bdb mysql-5.0.26/sql/sql_parse.cc mysql-5.0.26.kill_query/sql/sql_parse.cc
+--- mysql-5.0.26/sql/sql_parse.cc	2006-10-04 04:24:42.000000000 -0700
++++ mysql-5.0.26.kill_query/sql/sql_parse.cc	2006-10-24 16:02:43.000000000 -0700
+@@ -2054,7 +2054,7 @@
+   {
+     statistic_increment(thd->status_var.com_stat[SQLCOM_KILL], &LOCK_status);
+     ulong id=(ulong) uint4korr(packet);
+-    kill_one_thread(thd,id,false);
++    kill_one_thread(thd,id,0,false);
+     break;
+   }
+   case COM_SET_OPTION:
+@@ -4054,7 +4054,18 @@
+   }
+   case SQLCOM_KILL:
+   {
+-    Item *it= (Item *)lex->value_list.head();
++    query_id_t query_id= 0;
++    Item *q_item, *it= (Item *)lex->value_list.pop();
++    if(!lex->value_list.is_empty())
++    {
++      q_item= lex->value_list.pop();
++      if((!q_item->fixed && q_item->fix_fields(lex->thd, &q_item)) || q_item->check_cols(1))
++      {
++        my_message(ER_SET_CONSTANTS_ONLY, ER(ER_SET_CONSTANTS_ONLY), MYF(0));
++	goto error;
++      }
++      query_id= (ulong)q_item->val_int();
++    }
+ 
+     if ((!it->fixed && it->fix_fields(lex->thd, &it)) || it->check_cols(1))
+     {
+@@ -4062,7 +4073,7 @@
+ 		 MYF(0));
+       goto error;
+     }
+-    kill_one_thread(thd, (ulong)it->val_int(), lex->type & ONLY_KILL_QUERY);
++    kill_one_thread(thd, (ulong)it->val_int(), query_id, lex->type & ONLY_KILL_QUERY);
+     break;
+   }
+ #ifndef NO_EMBEDDED_ACCESS_CHECKS
+@@ -6883,15 +6894,23 @@
+     kill_one_thread()
+     thd			Thread class
+     id			Thread id
++    query_id_arg	Query id to match against
++    only_kill_query	Kill only query or thread and query
+ 
+   NOTES
+     This is written such that we have a short lock on LOCK_thread_count
++    
++    If query_id_arg != 0, the thread will only be killed if the thread's
++       current query matches.
++
++    If only_kill_query == true, then only the current query will be killed,
++       and not the entire thread
+ */
+ 
+-void kill_one_thread(THD *thd, ulong id, bool only_kill_query)
++void kill_one_thread(THD *thd, ulong id, query_id_t query_id_arg, bool only_kill_query)
+ {
+   THD *tmp;
+-  uint error=ER_NO_SUCH_THREAD;
++  uint error= ER_NO_SUCH_THREAD;
+   VOID(pthread_mutex_lock(&LOCK_thread_count)); // For unlink from list
+   I_List_iterator<THD> it(threads);
+   while ((tmp=it++))
+@@ -6902,24 +6921,40 @@
+       break;
+     }
+   }
+-  VOID(pthread_mutex_unlock(&LOCK_thread_count));
++  /* Need to hold the lock through THD::awake to be sure another query 
++     (with a different query_id_arg) is not started. */
++  if (!query_id_arg)
++    VOID(pthread_mutex_unlock(&LOCK_thread_count));
+   if (tmp)
+   {
+     if ((thd->security_ctx->master_access & SUPER_ACL) ||
+ 	!strcmp(thd->security_ctx->user, tmp->security_ctx->user))
+     {
+-      tmp->awake(only_kill_query ? THD::KILL_QUERY : THD::KILL_CONNECTION);
+-      error=0;
++      if (query_id_arg != 0 && query_id_arg != tmp->query_id)
++      {
++        error= ER_KILL_QUERY_ID_MISMATCH;
++        my_error(error, MYF(0), id);
++      }
++      else
++      {
++        tmp->awake(only_kill_query ? THD::KILL_QUERY : THD::KILL_CONNECTION);
++        error= 0;
++      }
+     }
+     else
+-      error=ER_KILL_DENIED_ERROR;
++    {
++      error= ER_KILL_DENIED_ERROR;
++      my_error(error, MYF(0), id);
++    }
++    
+     pthread_mutex_unlock(&tmp->LOCK_delete);
++    /* release the lock now only if we were checking for specific query */
++    if (query_id_arg)
++      VOID(pthread_mutex_unlock(&LOCK_thread_count));
+   }
+ 
+   if (!error)
+     send_ok(thd);
+-  else
+-    my_error(error, MYF(0), id);
+ }
+ 
+ 
+diff -Nur -x bdb mysql-5.0.26/sql/sql_show.cc mysql-5.0.26.kill_query/sql/sql_show.cc
+--- mysql-5.0.26/sql/sql_show.cc	2006-10-04 04:24:21.000000000 -0700
++++ mysql-5.0.26.kill_query/sql/sql_show.cc	2006-10-24 16:41:22.000000000 -0700
+@@ -1266,6 +1266,7 @@
+   uint   command;
+   const char *user,*host,*db,*proc_info,*state_info;
+   char *query;
++  query_id_t query_id;
+ };
+ 
+ #ifdef HAVE_EXPLICIT_TEMPLATE_INSTANTIATION
+@@ -1293,6 +1294,11 @@
+   field->maybe_null=1;
+   field_list.push_back(field=new Item_empty_string("Info",max_query_length));
+   field->maybe_null=1;
++  if (verbose)
++  {
++    field_list.push_back(field=new Item_int("Query_Id",FIELD_TYPE_LONGLONG));
++    field->maybe_null= 1;
++  }
+   if (protocol->send_fields(&field_list,
+                             Protocol::SEND_NUM_ROWS | Protocol::SEND_EOF))
+     DBUG_VOID_RETURN;
+@@ -1366,7 +1372,8 @@
+           */
+           uint length= min(max_query_length, tmp->query_length);
+           thd_info->query=(char*) thd->strmake(tmp->query,length);
+-        }
++	}
++	thd_info->query_id= tmp->query_id;
+         thread_infos.append(thd_info);
+       }
+     }
+@@ -1392,6 +1399,13 @@
+       protocol->store_null();
+     protocol->store(thd_info->state_info, system_charset_info);
+     protocol->store(thd_info->query, system_charset_info);
++    if (verbose)
++    {
++      if (thd_info->query)
++        protocol->store(thd_info->query_id);
++      else
++        protocol->store_null();
++    }
+     if (protocol->write())
+       break; /* purecov: inspected */
+   }
+diff -Nur -x bdb mysql-5.0.26/sql/sql_yacc.yy mysql-5.0.26.kill_query/sql/sql_yacc.yy
+--- mysql-5.0.26/sql/sql_yacc.yy	2006-10-04 04:24:23.000000000 -0700
++++ mysql-5.0.26.kill_query/sql/sql_yacc.yy	2006-10-23 18:38:14.000000000 -0700
+@@ -6883,19 +6883,31 @@
+ /* kill threads */
+ 
+ kill:
+-	KILL_SYM { Lex->sql_command= SQLCOM_KILL; } kill_option expr
++	KILL_SYM
+ 	{
+-	  LEX *lex=Lex;
++	  LEX *lex= Lex;
++  	  lex->sql_command= SQLCOM_KILL;
+ 	  lex->value_list.empty();
+-	  lex->value_list.push_front($4);
++	} 
++	kill_option expr kill_with_query_option
++	{
++	  Lex->value_list.push_front($4);
+ 	};
+ 
++
++
+ kill_option:
+ 	/* empty */	 { Lex->type= 0; }
+ 	| CONNECTION_SYM { Lex->type= 0; }
+ 	| QUERY_SYM      { Lex->type= ONLY_KILL_QUERY; }
+         ;
+ 
++kill_with_query_option:
++	/* empty */
++	| WITH QUERY_SYM expr { Lex->value_list.push_front($3); }
++	;
++
++
+ /* change database */
+ 
+ use:	USE_SYM ident

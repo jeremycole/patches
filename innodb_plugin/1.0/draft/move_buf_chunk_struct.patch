@@ -1,0 +1,38 @@
+diff -x '*.P*' -x 'Makefile*' -Naur innodb_plugin-1.0.0-5.1.orig/buf/buf0buf.c innodb_plugin-1.0.0-5.1.jcole/buf/buf0buf.c
+--- innodb_plugin-1.0.0-5.1.orig/buf/buf0buf.c	2008-04-12 04:04:28.000000000 -0700
++++ innodb_plugin-1.0.0-5.1.jcole/buf/buf0buf.c	2008-04-24 12:43:17.000000000 -0700
+@@ -254,15 +254,6 @@
+ UNIV_INTERN ibool		buf_debug_prints = FALSE;
+ #endif /* UNIV_DEBUG */
+ 
+-/* A chunk of buffers.  The buffer pool is allocated in chunks. */
+-struct buf_chunk_struct{
+-	ulint		mem_size;	/* allocated size of the chunk */
+-	ulint		size;		/* size of frames[] and blocks[] */
+-	void*		mem;		/* pointer to the memory area which
+-					was allocated for the frames */
+-	buf_block_t*	blocks;		/* array of buffer control blocks */
+-};
+-
+ /************************************************************************
+ Calculates a page checksum which is stored to the page when it is written
+ to a file. Note that we must be careful to calculate the same value on
+diff -x '*.P*' -x 'Makefile*' -Naur innodb_plugin-1.0.0-5.1.orig/include/buf0buf.h innodb_plugin-1.0.0-5.1.jcole/include/buf0buf.h
+--- innodb_plugin-1.0.0-5.1.orig/include/buf0buf.h	2008-03-17 07:19:04.000000000 -0700
++++ innodb_plugin-1.0.0-5.1.jcole/include/buf0buf.h	2008-04-24 12:43:58.000000000 -0700
+@@ -1079,6 +1079,15 @@
+ #endif /* UNIV_DEBUG_FILE_ACCESSES */
+ };
+ 
++/* A chunk of buffers.  The buffer pool is allocated in chunks. */
++struct buf_chunk_struct{
++	ulint		mem_size;	/* allocated size of the chunk */
++	ulint		size;		/* size of frames[] and blocks[] */
++	void*		mem;		/* pointer to the memory area which
++					was allocated for the frames */
++	buf_block_t*	blocks;		/* array of buffer control blocks */
++};
++
+ /* The buffer control block structure */
+ 
+ struct buf_block_struct{

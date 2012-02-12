@@ -1,0 +1,123 @@
+diff -Nur mysql-5.0.25-nightly-20060823.orig/client/mysql_priv.h mysql-5.0.25-nightly-20060823.reserved_connections/client/mysql_priv.h
+--- mysql-5.0.25-nightly-20060823.orig/client/mysql_priv.h	2006-08-22 23:09:20.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.reserved_connections/client/mysql_priv.h	2006-09-25 19:49:35.000000000 -0700
+@@ -1189,6 +1189,7 @@
+ extern ulong slow_launch_threads, slow_launch_time;
+ extern ulong table_cache_size;
+ extern ulong max_connections,max_connect_errors, connect_timeout;
++extern ulong reserved_connections;
+ extern ulong slave_net_timeout, slave_trans_retries;
+ extern uint max_user_connections;
+ extern ulong what_to_log,flush_time;
+diff -Nur mysql-5.0.25-nightly-20060823.orig/sql/mysqld.cc mysql-5.0.25-nightly-20060823.reserved_connections/sql/mysqld.cc
+--- mysql-5.0.25-nightly-20060823.orig/sql/mysqld.cc	2006-08-22 23:09:17.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.reserved_connections/sql/mysqld.cc	2006-09-25 19:51:18.000000000 -0700
+@@ -417,6 +417,7 @@
+   statements.
+ */
+ ulong prepared_stmt_count=0;
++ulong reserved_connections;
+ ulong thread_id=1L,current_pid;
+ ulong slow_launch_threads = 0, sync_binlog_period;
+ ulong expire_logs_days = 0;
+@@ -3850,7 +3851,9 @@
+     net->return_errno=1;
+ 
+   /* don't allow too many connections */
+-  if (thread_count - delayed_insert_threads >= max_connections+1 || abort_loop)
++  if (thread_count - delayed_insert_threads >= 
++        (max_connections + reserved_connections)
++        || abort_loop)
+   {
+     DBUG_PRINT("error",("Too many connections"));
+     close_connection(thd, ER_CON_COUNT_ERROR, 1);
+@@ -4583,6 +4586,7 @@
+   OPT_QUERY_CACHE_TYPE, OPT_QUERY_CACHE_WLOCK_INVALIDATE, OPT_RECORD_BUFFER,
+   OPT_RECORD_RND_BUFFER, OPT_DIV_PRECINCREMENT, OPT_RELAY_LOG_SPACE_LIMIT,
+   OPT_RELAY_LOG_PURGE,
++  OPT_RESERVED_CONNECTIONS,
+   OPT_SLAVE_NET_TIMEOUT, OPT_SLAVE_COMPRESSED_PROTOCOL, OPT_SLOW_LAUNCH_TIME,
+   OPT_SLAVE_TRANS_RETRIES, OPT_READONLY, OPT_DEBUGGING,
+   OPT_SORT_BUFFER, OPT_TABLE_CACHE,
+@@ -5903,6 +5907,11 @@
+    (gptr*) &relay_log_space_limit,
+    (gptr*) &relay_log_space_limit, 0, GET_ULL, REQUIRED_ARG, 0L, 0L,
+    (longlong) ULONG_MAX, 0, 1, 0},
++  {"reserved_connections", OPT_RESERVED_CONNECTIONS,
++   "The number of connections to reserved for SUPER users.",
++   (gptr*) &reserved_connections,
++   (gptr*) &reserved_connections, 0, GET_ULONG, REQUIRED_ARG, 1, 1, 32, 0, 1,
++   0},
+   {"slave_compressed_protocol", OPT_SLAVE_COMPRESSED_PROTOCOL,
+    "Use compression on master/slave protocol.",
+    (gptr*) &opt_slave_compressed_protocol,
+diff -Nur mysql-5.0.25-nightly-20060823.orig/sql/mysql_priv.h mysql-5.0.25-nightly-20060823.reserved_connections/sql/mysql_priv.h
+--- mysql-5.0.25-nightly-20060823.orig/sql/mysql_priv.h	2006-08-22 23:09:20.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.reserved_connections/sql/mysql_priv.h	2006-09-25 19:49:35.000000000 -0700
+@@ -1189,6 +1189,7 @@
+ extern ulong slow_launch_threads, slow_launch_time;
+ extern ulong table_cache_size;
+ extern ulong max_connections,max_connect_errors, connect_timeout;
++extern ulong reserved_connections;
+ extern ulong slave_net_timeout, slave_trans_retries;
+ extern uint max_user_connections;
+ extern ulong what_to_log,flush_time;
+diff -Nur mysql-5.0.25-nightly-20060823.orig/sql/set_var.cc mysql-5.0.25-nightly-20060823.reserved_connections/sql/set_var.cc
+--- mysql-5.0.25-nightly-20060823.orig/sql/set_var.cc	2006-08-22 23:09:19.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.reserved_connections/sql/set_var.cc	2006-09-25 19:52:25.000000000 -0700
+@@ -324,6 +324,9 @@
+ sys_var_bool_ptr	sys_relay_log_purge("relay_log_purge",
+                                             &relay_log_purge);
+ #endif
++sys_var_long_ptr	sys_reserved_connections("reserved_connections",
++                                           &reserved_connections,
++                                           fix_max_connections);
+ sys_var_long_ptr	sys_rpl_recovery_rank("rpl_recovery_rank",
+ 					      &rpl_recovery_rank);
+ sys_var_long_ptr	sys_query_cache_size("query_cache_size",
+@@ -722,6 +725,7 @@
+ #ifdef HAVE_REPLICATION
+   &sys_relay_log_purge,
+ #endif
++  &sys_reserved_connections,
+   &sys_rpl_recovery_rank,
+   &sys_safe_updates,
+   &sys_secure_auth,
+@@ -1031,6 +1035,8 @@
+   {sys_relay_log_purge.name,  (char*) &sys_relay_log_purge,         SHOW_SYS},
+   {"relay_log_space_limit",  (char*) &relay_log_space_limit,        SHOW_LONGLONG},
+ #endif
++  {sys_reserved_connections.name,  (char*) &sys_reserved_connections,
++   SHOW_SYS},
+   {sys_rpl_recovery_rank.name,(char*) &sys_rpl_recovery_rank,       SHOW_SYS},
+   {"secure_auth",             (char*) &sys_secure_auth,             SHOW_SYS},
+ #ifdef HAVE_SMEM
+@@ -1387,8 +1393,8 @@
+ static void fix_max_connections(THD *thd, enum_var_type type)
+ {
+ #ifndef EMBEDDED_LIBRARY
+-  resize_thr_alarm(max_connections +
+-		   global_system_variables.max_insert_delayed_threads + 10);
++  resize_thr_alarm(10 + max_connections + reserved_connections +
++		   global_system_variables.max_insert_delayed_threads);
+ #endif
+ }
+ 
+diff -Nur mysql-5.0.25-nightly-20060823.orig/sql/set_var.h mysql-5.0.25-nightly-20060823.reserved_connections/sql/set_var.h
+--- mysql-5.0.25-nightly-20060823.orig/sql/set_var.h	2006-08-22 23:09:18.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.reserved_connections/sql/set_var.h	2006-09-25 19:49:35.000000000 -0700
+@@ -833,6 +833,14 @@
+   virtual void set_default(THD *thd, enum_var_type type);
+ };
+ 
++class sys_var_reserved_connections :public sys_var_long_ptr
++{
++public:
++  sys_var_reserved_connections(const char *name_arg, ulong *value_ptr)
++    :sys_var_long_ptr(name_arg, value_ptr) {}
++};
++
++
+ /****************************************************************************
+   Classes for parsing of the SET command
+ ****************************************************************************/

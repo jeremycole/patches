@@ -1,0 +1,214 @@
+--- mylvmbackup-0.4/mylvmbackup	2007-01-14 07:23:21.000000000 -0800
++++ mylvmbackup-hacked/mylvmbackup	2007-03-31 13:00:16.000000000 -0700
+@@ -25,7 +25,7 @@
+ use diagnostics;
+ 
+ # Version is set from the Makefile
+-my $version='0.4';
++my $version='0.5';
+ 
+ # syslog-related options
+ my $syslog_ident = 'mylvmbackup';
+@@ -37,11 +37,13 @@
+ my $backuplv;
+ my $datefmt;
+ my $host;
++my $innodb_recover;
+ my $lvcreate;
+ my $lvname;
+ my $lvremove;
+ my $lvsize;
+ my $mount;
++my $mysqld_safe;
+ my $mountdir;
+ my $need_xfsworkaround;
+ my $password;
+@@ -84,7 +86,15 @@
+   }
+   openlog ($syslog_ident, $syslog_args, $syslog_facility);
+   log_msg ("Starting new backup...", LOG_INFO);
+-} 
++}
++
++my $lvm_version = lvm_version();
++
++if ($innodb_recover == 1 && $lvm_version =~ /^1/)
++{
++   log_msg("LVM version 1 does not support mounting read/write snapshots. Innodb will not be recovered.", LOG_INFO); 
++   $innodb_recover=0;
++}
+ 
+ # Clean up directory inputs
+ $prefix = clean_dirname($prefix);
+@@ -183,6 +193,11 @@
+ 	log_msg ("Mounting snapshot...", LOG_INFO);
+ 	if (mount_snapshot() and mount_posdir_bind())
+ 	{
++    if ($innodb_recover == 1) {
++      log_msg ("Recovering innodb...", LOG_INFO);
++      innodb_recover();
++    }
++
+ 		log_msg ("Taking actual backup...", LOG_INFO);
+ 		do_backup();
+ 	}    
+@@ -198,39 +213,41 @@
+   my $cfg = new Config::IniFiles( -file => $configfile )
+     or log_msg ("Couldn't read configuration file: " . $!, 'LOG_WARNING');
+ 
+-  $user = $cfg->val( 'mysql', 'user');
+-  $password = $cfg->val ('mysql', 'password');
+-  $host = $cfg->val ('mysql', 'host');
+-  $port = $cfg->val ('mysql', 'port');
+-  $socket = $cfg->val ('mysql', 'socket');
+-
+-  $need_xfsworkaround=$cfg->val ('fs', 'xfs');
+-
+-  $vgname=$cfg->val ('lvm', 'vgname');
+-  $prefix=$cfg->val ('misc', 'prefix');
+-  $lvname=$cfg->val ('lvm', 'lvname');
+-  $datefmt=$cfg->val ('misc', 'datefmt');
+-
+-  $relpath=$cfg->val ('fs', 'relpath');
+-
+-  $lvsize=$cfg->val ('lvm', 'lvsize');
+-  $tararg=$cfg->val ('misc', 'tararg');
+-
+-  $mountdir=$cfg->val ('fs', 'mountdir');
+-  $backupdir=$cfg->val ('fs', 'backupdir');
+-
+-  $lvcreate=$cfg->val ('tools', 'lvcreate');
+-  $lvremove=$cfg->val ('tools', 'lvremove');
+-  $mount=$cfg->val ('tools', 'mount');
+-  $tar=$cfg->val ('tools', 'tar');
+-  $umount=$cfg->val ('tools', 'umount');
+-
+-  $backuplv = $cfg->val ('lvm', 'backuplv');
+-
+-  $log_method = $cfg->val('logging', 'log_method');
+-  $syslog_socktype = $cfg->val ('logging', 'syslog_socktype');
+-  $syslog_facility = $cfg->val ('logging', 'syslog_facility');
+-  $syslog_remotehost = $cfg->val ('logging', 'syslog_remotehost');
++  $user = $cfg->val( 'mysql', 'user', $user);
++  $password = $cfg->val ('mysql', 'password', $password);
++  $host = $cfg->val ('mysql', 'host', $host);
++  $port = $cfg->val ('mysql', 'port', $port);
++  $socket = $cfg->val ('mysql', 'socket', $socket);
++  $mysqld_safe = $cfg->val ('mysql', 'mysqld_safe', $mysqld_safe);
++
++  $need_xfsworkaround=$cfg->val ('fs', 'xfs', $need_xfsworkaround);
++
++  $vgname=$cfg->val ('lvm', 'vgname', $vgname);
++  $prefix=$cfg->val ('misc', 'prefix', $prefix);
++  $lvname=$cfg->val ('lvm', 'lvname', $lvname);
++  $datefmt=$cfg->val ('misc', 'datefmt', $datefmt);
++  $innodb_recover=$cfg->val ('misc', 'innodb_recover', $innodb_recover);
++
++  $relpath=$cfg->val ('fs', 'relpath', $relpath);
++
++  $lvsize=$cfg->val ('lvm', 'lvsize', $lvsize);
++  $tararg=$cfg->val ('misc', 'tararg', $tararg);
++
++  $mountdir=$cfg->val ('fs', 'mountdir', $mountdir);
++  $backupdir=$cfg->val ('fs', 'backupdir', $backupdir);
++
++  $lvcreate=$cfg->val ('tools', 'lvcreate', $lvcreate);
++  $lvremove=$cfg->val ('tools', 'lvremove', $lvremove);
++  $mount=$cfg->val ('tools', 'mount', $mount);
++  $tar=$cfg->val ('tools', 'tar', $tar);
++  $umount=$cfg->val ('tools', 'umount', $umount);
++
++  $backuplv = $cfg->val ('lvm', 'backuplv', $backuplv);
++
++  $log_method = $cfg->val('logging', 'log_method', $log_method);
++  $syslog_socktype = $cfg->val ('logging', 'syslog_socktype', $syslog_socktype);
++  $syslog_facility = $cfg->val ('logging', 'syslog_facility', $syslog_facility);
++  $syslog_remotehost = $cfg->val ('logging', 'syslog_remotehost', $syslog_remotehost);
+ }
+ 
+ sub load_args
+@@ -241,6 +258,7 @@
+     "datefmt=s" => \$datefmt,
+     "help" => \&help,  
+     "host=s" => \$host,
++    "innodb_recover=i" => \$innodb_recover,
+     "lvcreate=s" => \$lvcreate,
+     "lvname=s" => \$lvname,
+     "lvremove=s" => \$lvremove,
+@@ -276,6 +294,8 @@
+ 
+   $need_xfsworkaround=0;
+ 
++  $innodb_recover=0;
++
+   $vgname='mysql';
+   $prefix='backup';
+   $lvname='data';
+@@ -288,11 +308,12 @@
+   $mountdir='/var/tmp/mylvmbackup/mnt/';
+   $backupdir='/var/tmp/mylvmbackup/backup/';
+ 
+-  $lvcreate='/sbin/lvcreate';
+-  $lvremove='/sbin/lvremove';
+-  $mount='/bin/mount';
+-  $umount='/bin/umount';
+-  $tar='/bin/tar';
++  $lvcreate='lvcreate';
++  $lvremove='lvremove';
++  $mount='mount';
++  $umount='umount';
++  $tar='tar';
++  $mysqld_safe='mysqld_safe';
+ 
+   $backuplv = '';
+ 
+@@ -350,11 +371,24 @@
+ sub mount_snapshot
+ { 
+   my $params = 'ro';
++
++  if ($innodb_recover) {
++    $params = 'rw';
++  } 
++
+   $params .= ',nouuid' if $need_xfsworkaround;
+   $mounted = 1 if (system("$mount -o $params /dev/$vgname/$backuplv $mountdir") == 0);
+   log_msg ("Cannot mount snapshot: $!", LOG_ERR) unless $mounted eq 1;
+   return $mounted; 
+-} 
++}
++
++sub innodb_recover
++{
++  if ( system("echo 'select 1;' | $mysqld_safe --datadir=/home/ebergen/mysql-snap/backup --skip-networking --skip-grant --bootstrap") != 0 )
++  {
++    log_msg ("MySQL faild to start", LOG_ERR);
++  }
++}
+ 
+ sub mount_posdir_bind
+ {
+@@ -454,6 +488,7 @@
+   --host=<host>                 Hostname for MySQL
+   --port=<port>                 TCP port for MySQL
+   --socket=<socket>             UNIX socket for MySQL
++  --innodb_recover              InnoDB Recovery in read/write snapshot
+   --lvcreate=<filename>         Path for lvcreate (def: $lvcreate)
+   --lvremove=<filename>         Path for lvremove (def: $lvremove)
+   --vgname=<name>               VG containing datadir (def: $vgname)
+@@ -523,4 +558,15 @@
+  return File::Basename::dirname($d.'/foo')
+ }
+ 
++sub lvm_version
++{
++  my $lv = `lvs --version`;
++
++  $lv =~ s/LVM version: //;
++  $lv =~ s/^\s*//;
++  $lv =~ s/\s.+//g;
++
++  return $lv;
++}
++
+ # vim: ts=2 sw=2 expandtab ft=perl:

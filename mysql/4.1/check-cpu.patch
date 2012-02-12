@@ -1,0 +1,14 @@
+===== BUILD/check-cpu 1.12 vs edited =====
+--- 1.12/BUILD/check-cpu	2005-06-05 17:54:11 -07:00
++++ edited/BUILD/check-cpu	2005-10-20 07:47:06 -07:00
+@@ -106,6 +106,10 @@
+     cpu_arg='powerpc'
+     ;;
+ 
++  *Power*Macintosh*)
++    cpu_arg='powerpc'
++    ;;
++
+   # unknown
+   *)
+     cpu_arg="";

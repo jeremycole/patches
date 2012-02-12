@@ -1,0 +1,246 @@
+diff -Nur -x bdb mysql-5.0.26/sql/item_create.cc set_session/sql/item_create.cc
+--- mysql-5.0.26/sql/item_create.cc	2006-10-04 04:24:09.000000000 -0700
++++ set_session/sql/item_create.cc	2006-10-17 20:22:26.000000000 -0700
+@@ -75,6 +75,11 @@
+   return new Item_func_connection_id();
+ }
+ 
++Item *create_func_connection_status(void)
++{
++  return new Item_func_connection_status();
++}
++
+ Item *create_func_conv(Item* a, Item *b, Item *c)
+ {
+   return new Item_func_conv(a,b,c);
+diff -Nur -x bdb mysql-5.0.26/sql/item_create.h set_session/sql/item_create.h
+--- mysql-5.0.26/sql/item_create.h	2006-10-04 04:24:01.000000000 -0700
++++ set_session/sql/item_create.h	2006-10-17 19:58:25.000000000 -0700
+@@ -31,6 +31,7 @@
+ Item *create_func_cast(Item *a, Cast_target cast_type, int len, int dec,
+                        CHARSET_INFO *cs);
+ Item *create_func_connection_id(void);
++Item *create_func_connection_status(void);
+ Item *create_func_conv(Item* a, Item *b, Item *c);
+ Item *create_func_cos(Item* a);
+ Item *create_func_cot(Item* a);
+diff -Nur -x bdb mysql-5.0.26/sql/item_strfunc.cc set_session/sql/item_strfunc.cc
+--- mysql-5.0.26/sql/item_strfunc.cc	2006-10-04 04:24:23.000000000 -0700
++++ set_session/sql/item_strfunc.cc	2006-10-17 20:40:35.000000000 -0700
+@@ -3175,3 +3175,15 @@
+   return str;
+ }
+ 
++String *Item_func_connection_status::val_str(String *str)
++{
++  if(!current_thd->connection_status)
++  {
++    null_value= 1;
++    return 0;
++  }
++
++  str->copy(current_thd->connection_status, strlen(current_thd->connection_status), system_charset_info);
++  return str;
++}
++
+diff -Nur -x bdb mysql-5.0.26/sql/item_strfunc.h set_session/sql/item_strfunc.h
+--- mysql-5.0.26/sql/item_strfunc.h	2006-10-04 04:24:10.000000000 -0700
++++ set_session/sql/item_strfunc.h	2006-10-17 20:16:26.000000000 -0700
+@@ -842,3 +842,13 @@
+   String *val_str(String *);
+ };
+ 
++class Item_func_connection_status: public Item_str_func
++{
++public:
++  Item_func_connection_status(): Item_str_func() {}
++  void fix_length_and_dec() {
++    max_length= MAX_BLOB_WIDTH;
++  }
++  const char *func_name() const{ return "connection_status"; }
++  String *val_str(String *);
++};
+diff -Nur -x bdb mysql-5.0.26/sql/lex.h set_session/sql/lex.h
+--- mysql-5.0.26/sql/lex.h	2006-10-04 04:24:43.000000000 -0700
++++ set_session/sql/lex.h	2006-10-17 20:13:15.000000000 -0700
+@@ -577,6 +577,7 @@
+   { "CONCAT",		SYM(CONCAT)},
+   { "CONCAT_WS",	SYM(CONCAT_WS)},
+   { "CONNECTION_ID",	F_SYM(FUNC_ARG0),0,CREATE_FUNC(create_func_connection_id)},
++  { "CONNECTION_STATUS",F_SYM(FUNC_ARG0),0,CREATE_FUNC(create_func_connection_status)},
+   { "CONV",		F_SYM(FUNC_ARG3),0,CREATE_FUNC(create_func_conv)},
+   { "CONVERT_TZ",	SYM(CONVERT_TZ_SYM)},
+   { "COUNT",		SYM(COUNT_SYM)},
+diff -Nur -x bdb mysql-5.0.26/sql/set_var.cc set_session/sql/set_var.cc
+--- mysql-5.0.26/sql/set_var.cc	2006-10-04 04:24:23.000000000 -0700
++++ set_session/sql/set_var.cc	2006-10-17 19:52:21.000000000 -0700
+@@ -3299,6 +3299,51 @@
+   return 0;
+ }
+ 
++/*****************************************************************************
++  Functions to handle SET CONNECTION STATUS [=] expr
++*****************************************************************************/
++
++/*
++  Set the connection status for a thread
++
++  SYNOPSIS
++    status_arg      current status string
++
++  RETURN
++    0
++*/
++set_var_connection_status::set_var_connection_status(String *status_arg)
++{
++  if(status_arg)
++  {
++    status.copy(*status_arg);
++    is_null= 0;
++  } else {
++    is_null= 1;
++  }
++}
++
++int set_var_connection_status::check(THD *thd)
++{
++  return 0;
++}
++
++int set_var_connection_status::update(THD *thd)
++{
++  if(thd->connection_status)
++  {
++    my_free((gptr)thd->connection_status, MYF(0));
++    thd->connection_status= 0;
++  }
++  if(!is_null)
++  {
++    thd->connection_status= my_strdup(status.c_ptr(), MYF(0));
++  } else {
++    thd->connection_status= 0;
++  }
++  return 0;
++}
++
+ 
+ /*****************************************************************************
+   Functions to handle SET PASSWORD
+diff -Nur -x bdb mysql-5.0.26/sql/set_var.h set_session/sql/set_var.h
+--- mysql-5.0.26/sql/set_var.h	2006-10-04 04:24:22.000000000 -0700
++++ set_session/sql/set_var.h	2006-10-17 18:46:34.000000000 -0700
+@@ -923,6 +923,19 @@
+   int update(THD *thd);
+ };
+ 
++/* For SET CONNECTION STATUS */
++
++class set_var_connection_status: public set_var_base
++{
++  String status;
++  bool is_null;
++public:
++  set_var_connection_status(String *status_arg);
++  int check(THD *thd);
++  int update(THD *thd);
++};
++
++
+ 
+ /* For SET NAMES and SET CHARACTER SET */
+ 
+diff -Nur -x bdb mysql-5.0.26/sql/sql_class.cc set_session/sql/sql_class.cc
+--- mysql-5.0.26/sql/sql_class.cc	2006-10-04 04:24:43.000000000 -0700
++++ set_session/sql/sql_class.cc	2006-10-17 19:58:01.000000000 -0700
+@@ -238,6 +238,7 @@
+ 
+   /* Variables with default values */
+   proc_info="login";
++  connection_status= 0;
+   where= THD::DEFAULT_WHERE;
+   server_id = ::server_id;
+   slave_net = 0;
+diff -Nur -x bdb mysql-5.0.26/sql/sql_class.h set_session/sql/sql_class.h
+--- mysql-5.0.26/sql/sql_class.h	2006-10-04 04:24:43.000000000 -0700
++++ set_session/sql/sql_class.h	2006-10-17 14:48:26.000000000 -0700
+@@ -1147,6 +1147,9 @@
+   */
+   const char *proc_info;
+ 
++  /* for connection status*/
++  const char *connection_status;
++
+   ulong client_capabilities;		/* What the client supports */
+   ulong max_client_packet_length;
+ 
+diff -Nur -x bdb mysql-5.0.26/sql/sql_show.cc set_session/sql/sql_show.cc
+--- mysql-5.0.26/sql/sql_show.cc	2006-10-04 04:24:21.000000000 -0700
++++ set_session/sql/sql_show.cc	2006-10-17 16:47:30.000000000 -0700
+@@ -1266,6 +1266,7 @@
+   uint   command;
+   const char *user,*host,*db,*proc_info,*state_info;
+   char *query;
++  char *connection_status;
+ };
+ 
+ #ifdef HAVE_EXPLICIT_TEMPLATE_INSTANTIATION
+@@ -1293,6 +1294,11 @@
+   field->maybe_null=1;
+   field_list.push_back(field=new Item_empty_string("Info",max_query_length));
+   field->maybe_null=1;
++  if(verbose)
++  {
++    field_list.push_back(field=new Item_empty_string("Status",max_query_length));
++    field->maybe_null=1;
++  }
+   if (protocol->send_fields(&field_list,
+                             Protocol::SEND_NUM_ROWS | Protocol::SEND_EOF))
+     DBUG_VOID_RETURN;
+@@ -1367,6 +1373,15 @@
+           uint length= min(max_query_length, tmp->query_length);
+           thd_info->query=(char*) thd->strmake(tmp->query,length);
+         }
++
++	if( verbose )
++	{
++	  if(tmp->connection_status)
++	    thd_info->connection_status= thd->strdup(tmp->connection_status);
++	  else
++	    thd_info->connection_status= 0;
++	}
++
+         thread_infos.append(thd_info);
+       }
+     }
+@@ -1392,6 +1407,13 @@
+       protocol->store_null();
+     protocol->store(thd_info->state_info, system_charset_info);
+     protocol->store(thd_info->query, system_charset_info);
++    if(verbose)
++    {
++      if(thd_info->connection_status)
++        protocol->store(thd_info->connection_status, system_charset_info);
++      else
++        protocol->store_null();
++    }
+     if (protocol->write())
+       break; /* purecov: inspected */
+   }
+diff -Nur -x bdb mysql-5.0.26/sql/sql_yacc.yy set_session/sql/sql_yacc.yy
+--- mysql-5.0.26/sql/sql_yacc.yy	2006-10-04 04:24:23.000000000 -0700
++++ set_session/sql/sql_yacc.yy	2006-10-17 18:51:34.000000000 -0700
+@@ -8111,6 +8111,14 @@
+ 	  {
+ 	    Lex->var_list.push_back(new set_var_password($3,$5));
+ 	  }
++	| CONNECTION_SYM STATUS_SYM opt_equal expr
++	  {
++	    THD *thd= YYTHD;
++	    Item *e= $4;
++	    e->fix_fields(thd, &e);
++	    String str, *res= e->val_str(&str);
++	    Lex->var_list.push_back(new set_var_connection_status(res));
++	  }
+ 	;
+ 
+ internal_variable_name:

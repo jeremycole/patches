@@ -1,0 +1,84 @@
+===== sql/field.cc 1.227 vs edited =====
+--- 1.227/sql/field.cc	2005-10-31 00:24:36 -08:00
++++ edited/sql/field.cc	2005-12-06 14:27:42 -08:00
+@@ -3784,7 +3784,11 @@
+ 
+   val_buffer->alloc(field_length+1);
+   to= (char*) val_buffer->ptr();
+-  val_buffer->length(field_length);
++
++  if(!(thd->variables.sql_mode & MODE_TIMESTAMP_MYSQL40_FORMAT))
++    val_buffer->length(field_length);
++  else
++    val_buffer->length(14);  
+ 
+ #ifdef WORDS_BIGENDIAN
+   if (table->db_low_byte_first)
+@@ -3795,7 +3799,10 @@
+ 
+   if (temp == 0L)
+   {				      /* Zero time is "000000" */
+-    val_ptr->set("0000-00-00 00:00:00", 19, &my_charset_bin);
++    if(!(thd->variables.sql_mode & MODE_TIMESTAMP_MYSQL40_FORMAT))
++      val_ptr->set("0000-00-00 00:00:00", 19, &my_charset_bin);
++    else
++      val_ptr->set("00000000000000", 14, &my_charset_bin);
+     return val_ptr;
+   }
+   val_buffer->set_charset(&my_charset_bin);	// Safety
+@@ -3817,27 +3824,27 @@
+   temp2=temp/10; temp=temp-temp2*10;
+   *to++= (char) ('0'+(char) (temp2));
+   *to++= (char) ('0'+(char) (temp));
+-  *to++= '-';
++  if(!(thd->variables.sql_mode & MODE_TIMESTAMP_MYSQL40_FORMAT)) *to++= '-';
+   temp=time_tmp.month;
+   temp2=temp/10; temp=temp-temp2*10;
+   *to++= (char) ('0'+(char) (temp2));
+   *to++= (char) ('0'+(char) (temp));
+-  *to++= '-';
++  if(!(thd->variables.sql_mode & MODE_TIMESTAMP_MYSQL40_FORMAT)) *to++= '-';
+   temp=time_tmp.day;
+   temp2=temp/10; temp=temp-temp2*10;
+   *to++= (char) ('0'+(char) (temp2));
+   *to++= (char) ('0'+(char) (temp));
+-  *to++= ' ';
++  if(!(thd->variables.sql_mode & MODE_TIMESTAMP_MYSQL40_FORMAT)) *to++= ' ';
+   temp=time_tmp.hour;
+   temp2=temp/10; temp=temp-temp2*10;
+   *to++= (char) ('0'+(char) (temp2));
+   *to++= (char) ('0'+(char) (temp));
+-  *to++= ':';
++  if(!(thd->variables.sql_mode & MODE_TIMESTAMP_MYSQL40_FORMAT)) *to++= ':';
+   temp=time_tmp.minute;
+   temp2=temp/10; temp=temp-temp2*10;
+   *to++= (char) ('0'+(char) (temp2));
+   *to++= (char) ('0'+(char) (temp));
+-  *to++= ':';
++  if(!(thd->variables.sql_mode & MODE_TIMESTAMP_MYSQL40_FORMAT)) *to++= ':';
+   temp=time_tmp.second;
+   temp2=temp/10; temp=temp-temp2*10;
+   *to++= (char) ('0'+(char) (temp2));
+===== sql/mysql_priv.h 1.371 vs edited =====
+--- 1.371/sql/mysql_priv.h	2005-12-04 05:32:55 -08:00
++++ edited/sql/mysql_priv.h	2005-12-06 14:05:13 -08:00
+@@ -247,6 +247,7 @@
+ #define MODE_MYSQL40                   (MODE_MYSQL323*2)
+ #define MODE_ANSI	               (MODE_MYSQL40*2)
+ #define MODE_NO_AUTO_VALUE_ON_ZERO     (MODE_ANSI*2)
++#define MODE_TIMESTAMP_MYSQL40_FORMAT  (MODE_NO_AUTO_VALUE_ON_ZERO*2)
+ 
+ #define RAID_BLOCK_SIZE 1024
+ 
+===== sql/mysqld.cc 1.606 vs edited =====
+--- 1.606/sql/mysqld.cc	2005-12-04 05:32:55 -08:00
++++ edited/sql/mysqld.cc	2005-12-06 13:37:47 -08:00
+@@ -239,7 +239,7 @@
+   "NO_DIR_IN_CREATE",
+   "POSTGRESQL", "ORACLE", "MSSQL", "DB2", "MAXDB", "NO_KEY_OPTIONS",
+   "NO_TABLE_OPTIONS", "NO_FIELD_OPTIONS", "MYSQL323", "MYSQL40", "ANSI",
+-  "NO_AUTO_VALUE_ON_ZERO", NullS
++  "NO_AUTO_VALUE_ON_ZERO", "TIMESTAMP_MYSQL40_FORMAT", NullS
+ };
+ TYPELIB sql_mode_typelib= { array_elements(sql_mode_names)-1,"",
+ 			    sql_mode_names, NULL };

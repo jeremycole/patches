@@ -1,0 +1,18 @@
+--- sql/sql_class.cc.orig	2006-04-25 15:02:32.000000000 -0700
++++ sql/sql_class.cc	2006-04-25 16:10:47.000000000 -0700
+@@ -274,6 +274,7 @@
+   init();
+   /* Initialize sub structures */
+   init_sql_alloc(&warn_root, WARN_ALLOC_BLOCK_SIZE, WARN_ALLOC_PREALLOC_SIZE);
++  profiling.set_thd(this);
+   user_connect=(USER_CONN *)0;
+   hash_init(&user_vars, system_charset_info, USER_VARS_HASH_SIZE, 0, 0,
+ 	    (hash_get_key) get_var_key,
+@@ -355,6 +356,7 @@
+                       variables.trans_alloc_block_size,
+                       variables.trans_prealloc_size);
+ #endif
++  profiling.reset();
+   transaction.xid_state.xid.null();
+   transaction.xid_state.in_thd=1;
+ }

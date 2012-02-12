@@ -1,0 +1,190 @@
+diff -Nur mysql-5.0.25-nightly-20060823.host_cache02/client/mysql_priv.h mysql-5.0.25-nightly-20060823.host_cache03/client/mysql_priv.h
+--- mysql-5.0.25-nightly-20060823.host_cache02/client/mysql_priv.h	2006-09-25 20:32:03.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache03/client/mysql_priv.h	2006-09-25 21:18:51.000000000 -0700
+@@ -1199,6 +1199,7 @@
+ extern ulong rpl_recovery_rank, thread_cache_size;
+ extern ulong back_log;
+ extern ulong specialflag, current_pid;
++extern ulong host_cache_size;
+ extern ulong expire_logs_days, sync_binlog_period, sync_binlog_counter;
+ extern ulong opt_tc_log_size, tc_log_max_pages_used, tc_log_page_size;
+ extern ulong tc_log_page_waits;
+@@ -1479,6 +1480,7 @@
+ void hostname_cache_inc_errors(struct in_addr *in);
+ void hostname_cache_reset_errors(struct in_addr *in);
+ bool hostname_cache_init();
++void hostname_cache_resize(uint size);
+ void hostname_cache_free();
+ void hostname_cache_refresh(void);
+ 
+diff -Nur mysql-5.0.25-nightly-20060823.host_cache02/sql/hostname.cc mysql-5.0.25-nightly-20060823.host_cache03/sql/hostname.cc
+--- mysql-5.0.25-nightly-20060823.host_cache02/sql/hostname.cc	2006-09-25 21:07:53.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache03/sql/hostname.cc	2006-09-25 21:18:09.000000000 -0700
+@@ -84,7 +84,7 @@
+ bool hostname_cache_init()
+ {
+   DBUG_ENTER("hostname_cache_init");
+-  if (!(hostname_cache= new hash_filo(HOST_CACHE_SIZE, 0, 0,
++  if (!(hostname_cache= new hash_filo(host_cache_size, 0, 0,
+                                       (hash_get_key) host_entry_get_key,
+                                       (hash_free_key) host_entry_free_key,
+                                       &my_charset_latin1)))
+@@ -125,6 +125,19 @@
+ }
+ 
+ /*
++  Resize the hostname cache by resizing the hash table underlying it.
++  
++  SYNOPSIS
++    hostname_cache_resize()
++      size                new size of the hostname cache
++*/
++void hostname_cache_resize(uint size)
++{
++  hostname_cache->resize(size);
++}
++
++
++/*
+   Adds an entry in the hostname cache for an IP address stored in 'in'
+   and a hostname 'name'.
+ 
+@@ -137,8 +150,8 @@
+ {
+   DBUG_ENTER("hostname_cache_add");
+  
+-  if (likely(!(specialflag & SPECIAL_NO_HOST_CACHE)))
+-   {
++  if (likely(host_cache_size > 0)) 
++  {
+     VOID(pthread_mutex_lock(&hostname_cache->lock));
+     host_entry *entry;
+     if (!(entry= (host_entry*) hostname_cache->search((gptr) &in->s_addr, 0)))
+@@ -256,7 +269,7 @@
+   /*
+     Check the hostname cache for this IP address first.
+   */
+-  if (!(specialflag & SPECIAL_NO_HOST_CACHE))
++  if (likely(host_cache_size > 0))
+   {
+     host_entry *entry;
+     VOID(pthread_mutex_lock(&hostname_cache->lock));
+diff -Nur mysql-5.0.25-nightly-20060823.host_cache02/sql/mysqld.cc mysql-5.0.25-nightly-20060823.host_cache03/sql/mysqld.cc
+--- mysql-5.0.25-nightly-20060823.host_cache02/sql/mysqld.cc	2006-09-25 20:31:50.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache03/sql/mysqld.cc	2006-09-25 21:19:17.000000000 -0700
+@@ -384,6 +384,7 @@
+ uint tc_heuristic_recover= 0;
+ uint volatile thread_count, thread_running;
+ ulonglong thd_startup_options;
++ulong host_cache_size;
+ ulong back_log, connect_timeout, concurrency, server_id;
+ ulong table_cache_size, thread_stack, what_to_log;
+ ulong query_buff_size, slow_launch_time, slave_open_temp_tables;
+@@ -4586,7 +4587,7 @@
+   OPT_SLAVE_NET_TIMEOUT, OPT_SLAVE_COMPRESSED_PROTOCOL, OPT_SLOW_LAUNCH_TIME,
+   OPT_SLAVE_TRANS_RETRIES, OPT_READONLY, OPT_DEBUGGING,
+   OPT_SORT_BUFFER, OPT_TABLE_CACHE,
+-  OPT_THREAD_CONCURRENCY, OPT_THREAD_CACHE_SIZE,
++  OPT_THREAD_CONCURRENCY, OPT_THREAD_CACHE_SIZE, OPT_HOST_CACHE_SIZE,
+   OPT_TMP_TABLE_SIZE, OPT_THREAD_STACK,
+   OPT_WAIT_TIMEOUT, OPT_MYISAM_REPAIR_THREADS,
+   OPT_INNODB_MIRRORED_LOG_GROUPS,
+@@ -5956,6 +5957,10 @@
+    "How many threads we should keep in a cache for reuse.",
+    (gptr*) &thread_cache_size, (gptr*) &thread_cache_size, 0, GET_ULONG,
+    REQUIRED_ARG, 0, 0, 16384, 0, 1, 0},
++  {"host_cache_size", OPT_HOST_CACHE_SIZE,
++   "How many hostnames should be cached to avoid resolving.",
++   (gptr*) &host_cache_size, (gptr*) &host_cache_size, 0, GET_ULONG,
++   REQUIRED_ARG, HOST_CACHE_SIZE, 0, 2048, 0, 1, 0},
+   {"thread_concurrency", OPT_THREAD_CONCURRENCY,
+    "Permits the application to give the threads system a hint for the desired number of threads that should be run at the same time.",
+    (gptr*) &concurrency, (gptr*) &concurrency, 0, GET_ULONG, REQUIRED_ARG,
+diff -Nur mysql-5.0.25-nightly-20060823.host_cache02/sql/mysql_priv.h mysql-5.0.25-nightly-20060823.host_cache03/sql/mysql_priv.h
+--- mysql-5.0.25-nightly-20060823.host_cache02/sql/mysql_priv.h	2006-09-25 20:32:03.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache03/sql/mysql_priv.h	2006-09-25 21:18:51.000000000 -0700
+@@ -1199,6 +1199,7 @@
+ extern ulong rpl_recovery_rank, thread_cache_size;
+ extern ulong back_log;
+ extern ulong specialflag, current_pid;
++extern ulong host_cache_size;
+ extern ulong expire_logs_days, sync_binlog_period, sync_binlog_counter;
+ extern ulong opt_tc_log_size, tc_log_max_pages_used, tc_log_page_size;
+ extern ulong tc_log_page_waits;
+@@ -1479,6 +1480,7 @@
+ void hostname_cache_inc_errors(struct in_addr *in);
+ void hostname_cache_reset_errors(struct in_addr *in);
+ bool hostname_cache_init();
++void hostname_cache_resize(uint size);
+ void hostname_cache_free();
+ void hostname_cache_refresh(void);
+ 
+diff -Nur mysql-5.0.25-nightly-20060823.host_cache02/sql/set_var.cc mysql-5.0.25-nightly-20060823.host_cache03/sql/set_var.cc
+--- mysql-5.0.25-nightly-20060823.host_cache02/sql/set_var.cc	2006-09-25 20:31:50.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache03/sql/set_var.cc	2006-09-25 21:16:31.000000000 -0700
+@@ -411,6 +411,8 @@
+                                                     &table_lock_wait_timeout);
+ sys_var_long_ptr	sys_thread_cache_size("thread_cache_size",
+ 					      &thread_cache_size);
++sys_var_host_cache_size sys_host_cache_size("host_cache_size",
++                                            &host_cache_size);
+ sys_var_thd_enum	sys_tx_isolation("tx_isolation",
+ 					 &SV::tx_isolation,
+ 					 &tx_isolation_typelib,
+@@ -645,6 +647,7 @@
+   &sys_foreign_key_checks,
+   &sys_group_concat_max_len,
+   &sys_have_innodb,
++  &sys_host_cache_size,
+   &sys_identity,
+   &sys_init_connect,
+   &sys_init_slave,
+@@ -877,6 +880,7 @@
+   {"have_raid",		      (char*) &have_raid,		    SHOW_HAVE},
+   {"have_rtree_keys",         (char*) &have_rtree_keys,             SHOW_HAVE},
+   {"have_symlink",            (char*) &have_symlink,                SHOW_HAVE},
++  {sys_host_cache_size.name,  (char*) &sys_host_cache_size,         SHOW_SYS},
+   {"init_connect",            (char*) &sys_init_connect,            SHOW_SYS},
+   {"init_file",               (char*) &opt_init_file,               SHOW_CHAR_PTR},
+   {"init_slave",              (char*) &sys_init_slave,              SHOW_SYS},
+@@ -2357,6 +2361,21 @@
+  }
+ }
+ 
++bool sys_var_host_cache_size::update(THD *thd, set_var *var)
++{
++  int new_size= var->value->val_int();
++  
++  if(new_size < 0 || new_size > 2048) {
++    my_error(ER_WRONG_VALUE_FOR_VAR, MYF(0),
++             sys_host_cache_size.name, "bad value");
++    return -1;
++  }
++  
++  host_cache_size= (ulong) new_size;
++  hostname_cache_resize((uint)host_cache_size);
++  
++  return 0;
++}
+ 
+ LEX_STRING default_key_cache_base= {(char *) "default", 7 };
+ 
+diff -Nur mysql-5.0.25-nightly-20060823.host_cache02/sql/set_var.h mysql-5.0.25-nightly-20060823.host_cache03/sql/set_var.h
+--- mysql-5.0.25-nightly-20060823.host_cache02/sql/set_var.h	2006-09-25 20:31:50.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache03/sql/set_var.h	2006-09-25 21:16:31.000000000 -0700
+@@ -693,6 +693,15 @@
+ };
+ 
+ 
++class sys_var_host_cache_size :public sys_var_long_ptr
++{
++public:
++  sys_var_host_cache_size(const char *name_arg, ulong *value_ptr)
++    :sys_var_long_ptr(name_arg, value_ptr) {}
++  bool update(THD *thd, set_var *var);
++};
++
++
+ class sys_var_key_buffer_size :public sys_var_key_cache_param
+ {
+ public:

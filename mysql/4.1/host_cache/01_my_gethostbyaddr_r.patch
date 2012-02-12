@@ -1,0 +1,203 @@
+# This is a BitKeeper generated diff -Nru style patch.
+#
+# ChangeSet
+#   2005/10/23 20:37:10-07:00 jcole@jojo.local 
+#   my_gethostbyaddr.c:
+#     new file
+#   my_thr_init.c, Makefile.am, my_net.h:
+#     apply patch
+# 
+# mysys/my_gethostbyaddr.c
+#   2005/10/23 20:36:46-07:00 jcole@jojo.local +79 -0
+# 
+# mysys/my_gethostbyaddr.c
+#   2005/10/23 20:36:46-07:00 jcole@jojo.local +0 -0
+#   BitKeeper file /Users/jcole/bk/mysql-t/mysys/my_gethostbyaddr.c
+# 
+# mysys/my_thr_init.c
+#   2005/10/23 20:36:22-07:00 jcole@jojo.local +9 -0
+#   apply patch
+# 
+# mysys/Makefile.am
+#   2005/10/23 20:36:18-07:00 jcole@jojo.local +2 -1
+#   apply patch
+# 
+# include/my_net.h
+#   2005/10/23 20:36:09-07:00 jcole@jojo.local +29 -3
+#   apply patch
+# 
+diff -Nru a/include/my_net.h b/include/my_net.h
+--- a/include/my_net.h	2005-10-23 20:38:37 -07:00
++++ b/include/my_net.h	2005-10-23 20:38:37 -07:00
+@@ -76,13 +76,39 @@
+ 
+ void my_inet_ntoa(struct in_addr in, char *buf);
+ 
++#if !defined(HPUX10)
++struct hostent;
++#endif /* HPUX */
++
++/*
++  Handling of gethostbyaddr_r()
++*/
++
++#if defined(HAVE_GETHOSTBYADDR_R)
++/* The system natively has a gethostbyaddr_r, so we won't need _free() */
++#define my_gethostbyaddr_r_free()
++#if !defined(HAVE_SOLARIS_STYLE_GETHOST)
++struct hostent *my_gethostbyaddr_r(const char *addr,
++                                   int length, int format,
++				                           struct hostent *result, char *buffer,
++				                           int buflen, int *h_errnop);
++#else
++/* Solaris-style gethostbyaddr_r, so macro it */
++#define my_gethostbyaddr_r(A,B,C,D,E,F,G) gethostbyaddr_r((A),(B),(C),(D),(E),(F),(G))
++#endif
++#else
++/* No gethostbyaddr_r available at all, so emulate it using mutex */
++struct hostent *my_gethostbyaddr_r(const char *addr,
++                                   int length, int format,
++				                           struct hostent *result, char *buffer,
++				                           int buflen, int *h_errnop);
++void my_gethostbyaddr_r_free();
++#endif
++
+ /*
+   Handling of gethostbyname_r()
+ */
+ 
+-#if !defined(HPUX10)
+-struct hostent;
+-#endif /* HPUX */
+ #if !defined(HAVE_GETHOSTBYNAME_R)
+ struct hostent *my_gethostbyname_r(const char *name,
+ 				   struct hostent *result, char *buffer,
+diff -Nru a/mysys/Makefile.am b/mysys/Makefile.am
+--- a/mysys/Makefile.am	2005-10-23 20:38:37 -07:00
++++ b/mysys/Makefile.am	2005-10-23 20:38:37 -07:00
+@@ -53,7 +53,8 @@
+ 			default.c my_compress.c checksum.c raid.cc \
+ 			my_net.c my_semaphore.c my_port.c my_sleep.c \
+ 			charset.c charset-def.c my_bitmap.c my_bit.c md5.c \
+-			my_gethostbyname.c rijndael.c my_aes.c sha1.c \
++			my_gethostbyname.c my_gethostbyaddr.c \
++			rijndael.c my_aes.c sha1.c \
+ 			my_handler.c my_netware.c my_windac.c my_access.c 
+ EXTRA_DIST =		thr_alarm.c thr_lock.c my_pthread.c my_thr_init.c \
+ 			thr_mutex.c thr_rwlock.c
+diff -Nru a/mysys/my_gethostbyaddr.c b/mysys/my_gethostbyaddr.c
+--- /dev/null	Wed Dec 31 16:00:00 196900
++++ b/mysys/my_gethostbyaddr.c	2005-10-23 20:38:37 -07:00
+@@ -0,0 +1,79 @@
++/* Copyright (C) 2000 MySQL AB & MySQL Finland AB & TCX DataKonsult AB
++   
++   This library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Library General Public
++   License as published by the Free Software Foundation; either
++   version 2 of the License, or (at your option) any later version.
++   
++   This library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Library General Public License for more details.
++   
++   You should have received a copy of the GNU Library General Public
++   License along with this library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place - Suite 330, Boston,
++   MA 02111-1307, USA */
++
++/* Thread safe version of gethostbyaddr() */
++
++#include "mysys_priv.h"
++#if !defined(MSDOS) && !defined(__WIN__)
++#include <netdb.h>
++#endif
++#include <my_net.h>
++
++/* This file is not needed if my_gethostbyaddr_r is a macro */
++#if !defined(my_gethostbyaddr_r)
++
++#if defined(HAVE_GETHOSTBYADDR_R) && !defined(HAVE_SOLARIS_STYLE_GETHOST)
++
++/* system probably has 8-argument (glibc) form of gethostbyaddr_r */
++
++struct hostent *my_gethostbyaddr_r(const char *addr,
++                                   int length, int format,
++				                           struct hostent *result, char *buffer,
++				                           int buflen, int *h_errnop)
++{
++  struct hostent *hp;
++  DBUG_ASSERT((size_t) buflen >= sizeof(*result));
++  if (gethostbyaddr_r(addr, length, format, result, buffer, 
++                      (size_t) buflen, &hp, h_errnop))
++    return 0;
++  return hp;
++}
++
++#else /* !HAVE_GETHOSTBYADDR_R */
++
++#ifdef THREAD
++extern pthread_mutex_t LOCK_gethostbyaddr_r;
++#endif
++
++/*
++  No gethostbyaddr_r() function exists.
++  In this case we have to keep a mutex over the call to ensure that no
++  other thread is going to reuse the internal memory.
++
++  The user is responsible to call my_gethostbyaddr_r_free() when he
++  is finished with the structure.
++*/
++
++struct hostent *my_gethostbyaddr_r(const char *addr,
++                                   int length, int format,
++				                           struct hostent *result, char *buffer,
++				                           int buflen, int *h_errnop)
++{
++  struct hostent *hp;
++  pthread_mutex_lock(&LOCK_gethostbyaddr_r);
++  hp= gethostbyaddr(addr, length, format);
++  *h_errnop= h_errno;
++  return hp;
++}
++
++void my_gethostbyaddr_r_free()
++{
++  pthread_mutex_unlock(&LOCK_gethostbyaddr_r);  
++}
++
++#endif /* !HAVE_GETHOSTBYADDR_R */
++#endif /* !my_gethostbyaddr_r */
+diff -Nru a/mysys/my_thr_init.c b/mysys/my_thr_init.c
+--- a/mysys/my_thr_init.c	2005-10-23 20:38:37 -07:00
++++ b/mysys/my_thr_init.c	2005-10-23 20:38:37 -07:00
+@@ -34,6 +34,9 @@
+ #if !defined(HAVE_LOCALTIME_R) || !defined(HAVE_GMTIME_R)
+ pthread_mutex_t LOCK_localtime_r;
+ #endif
++#ifndef HAVE_GETHOSTBYADDR_R
++pthread_mutex_t LOCK_gethostbyaddr_r;
++#endif
+ #ifndef HAVE_GETHOSTBYNAME_R
+ pthread_mutex_t LOCK_gethostbyname_r;
+ #endif
+@@ -101,6 +104,9 @@
+ #if !defined(HAVE_LOCALTIME_R) || !defined(HAVE_GMTIME_R)
+   pthread_mutex_init(&LOCK_localtime_r,MY_MUTEX_INIT_SLOW);
+ #endif
++#ifndef HAVE_GETHOSTBYADDR_R
++  pthread_mutex_init(&LOCK_gethostbyaddr_r,MY_MUTEX_INIT_SLOW);
++#endif
+ #ifndef HAVE_GETHOSTBYNAME_R
+   pthread_mutex_init(&LOCK_gethostbyname_r,MY_MUTEX_INIT_SLOW);
+ #endif
+@@ -132,6 +138,9 @@
+   pthread_mutex_destroy(&THR_LOCK_charset);
+ #if !defined(HAVE_LOCALTIME_R) || !defined(HAVE_GMTIME_R)
+   pthread_mutex_destroy(&LOCK_localtime_r);
++#endif
++#ifndef HAVE_GETHOSTBYADDR_R
++  pthread_mutex_destroy(&LOCK_gethostbyaddr_r);
+ #endif
+ #ifndef HAVE_GETHOSTBYNAME_R
+   pthread_mutex_destroy(&LOCK_gethostbyname_r);

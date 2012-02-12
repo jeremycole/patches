@@ -1,0 +1,98 @@
+--- mysql-5.0.37/innobase/buf/buf0buf.c	2007-03-05 11:21:02.000000000 -0800
++++ mysql-5.0.37.pagedump/innobase/buf/buf0buf.c	2007-04-12 11:34:22.000000000 -0700
+@@ -2229,6 +2229,55 @@
+ }	
+ #endif /* UNIV_DEBUG */
+ 
++
++ulint
++buf_dump_stats(void)
++{
++  ulint pages_dumped = 0;
++	ulint		size;
++	buf_block_t* 	block;
++	dict_index_t*	index;
++  ulint		i;
++	dulint		index_id;
++  FILE *state;
++  
++  state = fopen("ib_page_stats", "w");
++
++  if(!state)
++  {
++    fprintf(stderr, "InnoDB: Couldn't save stats; file open failed\n");
++    return(0);
++  }
++
++	mutex_enter(&(buf_pool->mutex));
++
++	size = buf_pool->curr_size;
++
++	for (i = 0; i < size; i++) {
++		block = buf_pool_get_nth_block(buf_pool, i);
++
++		if (fil_page_get_type(block->frame) == FIL_PAGE_INDEX) {
++			index_id = btr_page_get_index_id(block->frame);
++  		index = dict_index_get_if_in_cache(index_id);
++  		fprintf(state, "%d\t%d\t%d\t%d\n", 
++  		  block->space, block->offset,
++  		  page_get_n_recs(block->frame),
++  		  page_get_data_size(block->frame)
++  		);
++  		pages_dumped++;
++    }
++  }
++
++	mutex_exit(&(buf_pool->mutex));
++
++  fclose(state);
++  
++  fprintf(stderr, "InnoDB: Dumped %d page stats to saved stats\n",
++    pages_dumped);
++
++  return(pages_dumped);
++}
++
+ /*************************************************************************
+ Returns the number of latched pages in the buffer pool. */
+ 
+--- mysql-5.0.37/innobase/include/buf0buf.h	2007-03-05 11:21:11.000000000 -0800
++++ mysql-5.0.37.pagedump/innobase/include/buf0buf.h	2007-04-12 11:11:29.000000000 -0700
+@@ -499,6 +499,10 @@
+ /************************************************************************
+ Prints a page to stderr. */
+ 
++/* XXX jcole */
++ulint
++buf_dump_stats(void);
++
+ void
+ buf_page_print(
+ /*===========*/
+--- mysql-5.0.37/sql/ha_innodb.cc	2007-03-05 11:21:41.000000000 -0800
++++ mysql-5.0.37.pagedump/sql/ha_innodb.cc	2007-04-12 11:18:50.000000000 -0700
+@@ -113,6 +113,7 @@
+ #include "../innobase/include/univ.i"
+ #include "../innobase/include/os0file.h"
+ #include "../innobase/include/os0thread.h"
++#include "../innobase/include/buf0buf.h"
+ #include "../innobase/include/srv0start.h"
+ #include "../innobase/include/srv0srv.h"
+ #include "../innobase/include/trx0roll.h"
+@@ -1452,6 +1453,7 @@
+ 		glob_mi.pos = trx_sys_mysql_master_log_pos;
+ 	}
+ */
++
+ 	DBUG_RETURN(FALSE);
+ error:
+         have_innodb= SHOW_OPTION_DISABLED;	// If we couldn't use handler
+@@ -1477,6 +1479,8 @@
+ #endif
+ 	if (innodb_inited) {
+ 
++      buf_dump_stats();
++
+ 	        srv_fast_shutdown = (ulint) innobase_fast_shutdown;
+ 	  	innodb_inited = 0;
+ 	  	if (innobase_shutdown_for_mysql() != DB_SUCCESS) {

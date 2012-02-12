@@ -1,0 +1,243 @@
+diff -Nur mysql-5.0.25-nightly-20060823.host_cache03/client/mysql_priv.h mysql-5.0.25-nightly-20060823.host_cache04/client/mysql_priv.h
+--- mysql-5.0.25-nightly-20060823.host_cache03/client/mysql_priv.h	2006-09-25 21:18:51.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache04/client/mysql_priv.h	2006-09-25 21:38:21.000000000 -0700
+@@ -35,6 +35,7 @@
+ #include <my_base.h>			/* Needed by field.h */
+ #include "sql_bitmap.h"
+ #include "sql_array.h"
++#include "hash_filo.h"
+ 
+ #ifdef __EMX__
+ #undef write  /* remove pthread.h macro definition for EMX */
+@@ -854,6 +855,7 @@
+ bool append_escaped(String *to_str, String *from_str);
+ 
+ /* sql_show.cc */
++int mysqld_show_host_cache(THD *thd);
+ bool mysqld_show_open_tables(THD *thd,const char *wild);
+ bool mysqld_show_logs(THD *thd);
+ void append_identifier(THD *thd, String *packet, const char *name,
+@@ -1475,6 +1477,14 @@
+ int wild_case_compare(CHARSET_INFO *cs, const char *str,const char *wildstr);
+ 
+ /* from hostname.cc */
++class host_entry :public hash_filo_element
++{
++public:
++  uint32 ip;
++  uint	 errors;
++  char	 *hostname;
++};
++extern hash_filo *hostname_cache;
+ struct in_addr;
+ my_string ip_to_hostname(struct in_addr *in,uint *errors);
+ void hostname_cache_inc_errors(struct in_addr *in);
+diff -Nur mysql-5.0.25-nightly-20060823.host_cache03/sql/hostname.cc mysql-5.0.25-nightly-20060823.host_cache04/sql/hostname.cc
+--- mysql-5.0.25-nightly-20060823.host_cache03/sql/hostname.cc	2006-09-25 21:18:09.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache04/sql/hostname.cc	2006-09-26 11:07:19.000000000 -0700
+@@ -39,15 +39,7 @@
+ #endif
+ 
+ 
+-class host_entry :public hash_filo_element
+-{
+-public:
+-  uint32 ip;
+-  uint	 errors;
+-  char	 *hostname;
+-};
+-
+-static hash_filo *hostname_cache;
++hash_filo *hostname_cache;
+ 
+ /*
+   A simple inline function to return the hash key for a given entry.
+@@ -307,7 +299,7 @@
+     DBUG_PRINT("error", ("In reverse lookup: my_gethostbyaddr_r returned %d",
+                          tmp_errno));
+     my_gethostbyaddr_r_free();
+-    return 0;
++    DBUG_RETURN(0);
+   }
+ 
+   /*
+diff -Nur mysql-5.0.25-nightly-20060823.host_cache03/sql/lex.h mysql-5.0.25-nightly-20060823.host_cache04/sql/lex.h
+--- mysql-5.0.25-nightly-20060823.host_cache03/sql/lex.h	2006-09-25 21:16:07.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache04/sql/lex.h	2006-09-25 21:36:51.000000000 -0700
+@@ -223,6 +223,7 @@
+   { "HAVING",		SYM(HAVING)},
+   { "HELP",		SYM(HELP_SYM)},
+   { "HIGH_PRIORITY",	SYM(HIGH_PRIORITY)},
++  { "HOST",             SYM(HOST_SYM)},
+   { "HOSTS",		SYM(HOSTS_SYM)},
+   { "HOUR",		SYM(HOUR_SYM)},
+   { "HOUR_MICROSECOND",	SYM(HOUR_MICROSECOND_SYM)},
+diff -Nur mysql-5.0.25-nightly-20060823.host_cache03/sql/mysqld.cc mysql-5.0.25-nightly-20060823.host_cache04/sql/mysqld.cc
+--- mysql-5.0.25-nightly-20060823.host_cache03/sql/mysqld.cc	2006-09-25 21:19:17.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache04/sql/mysqld.cc	2006-09-25 21:50:34.000000000 -0700
+@@ -6042,6 +6042,7 @@
+   {"Com_ha_open",	       (char*) offsetof(STATUS_VAR, com_stat[(uint) SQLCOM_HA_OPEN]), SHOW_LONG_STATUS},
+   {"Com_ha_read",	       (char*) offsetof(STATUS_VAR, com_stat[(uint) SQLCOM_HA_READ]), SHOW_LONG_STATUS},
+   {"Com_help",                 (char*) offsetof(STATUS_VAR, com_stat[(uint) SQLCOM_HELP]), SHOW_LONG_STATUS},
++  {"Com_show_host_cache",      (char*) offsetof(STATUS_VAR, com_stat[(uint) SQLCOM_SHOW_HOST_CACHE]), SHOW_LONG_STATUS},
+   {"Com_insert",	       (char*) offsetof(STATUS_VAR, com_stat[(uint) SQLCOM_INSERT]), SHOW_LONG_STATUS},
+   {"Com_insert_select",	       (char*) offsetof(STATUS_VAR, com_stat[(uint) SQLCOM_INSERT_SELECT]), SHOW_LONG_STATUS},
+   {"Com_kill",		       (char*) offsetof(STATUS_VAR, com_stat[(uint) SQLCOM_KILL]), SHOW_LONG_STATUS},
+diff -Nur mysql-5.0.25-nightly-20060823.host_cache03/sql/mysql_priv.h mysql-5.0.25-nightly-20060823.host_cache04/sql/mysql_priv.h
+--- mysql-5.0.25-nightly-20060823.host_cache03/sql/mysql_priv.h	2006-09-25 21:18:51.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache04/sql/mysql_priv.h	2006-09-25 21:38:21.000000000 -0700
+@@ -35,6 +35,7 @@
+ #include <my_base.h>			/* Needed by field.h */
+ #include "sql_bitmap.h"
+ #include "sql_array.h"
++#include "hash_filo.h"
+ 
+ #ifdef __EMX__
+ #undef write  /* remove pthread.h macro definition for EMX */
+@@ -854,6 +855,7 @@
+ bool append_escaped(String *to_str, String *from_str);
+ 
+ /* sql_show.cc */
++int mysqld_show_host_cache(THD *thd);
+ bool mysqld_show_open_tables(THD *thd,const char *wild);
+ bool mysqld_show_logs(THD *thd);
+ void append_identifier(THD *thd, String *packet, const char *name,
+@@ -1475,6 +1477,14 @@
+ int wild_case_compare(CHARSET_INFO *cs, const char *str,const char *wildstr);
+ 
+ /* from hostname.cc */
++class host_entry :public hash_filo_element
++{
++public:
++  uint32 ip;
++  uint	 errors;
++  char	 *hostname;
++};
++extern hash_filo *hostname_cache;
+ struct in_addr;
+ my_string ip_to_hostname(struct in_addr *in,uint *errors);
+ void hostname_cache_inc_errors(struct in_addr *in);
+diff -Nur mysql-5.0.25-nightly-20060823.host_cache03/sql/sql_lex.h mysql-5.0.25-nightly-20060823.host_cache04/sql/sql_lex.h
+--- mysql-5.0.25-nightly-20060823.host_cache03/sql/sql_lex.h	2006-09-25 21:16:06.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache04/sql/sql_lex.h	2006-09-25 21:39:54.000000000 -0700
+@@ -95,6 +95,7 @@
+   SQLCOM_XA_START, SQLCOM_XA_END, SQLCOM_XA_PREPARE,
+   SQLCOM_XA_COMMIT, SQLCOM_XA_ROLLBACK, SQLCOM_XA_RECOVER,
+   SQLCOM_SHOW_PROC_CODE, SQLCOM_SHOW_FUNC_CODE,
++  SQLCOM_SHOW_HOST_CACHE,
+   /* This should be the last !!! */
+ 
+   SQLCOM_END
+diff -Nur mysql-5.0.25-nightly-20060823.host_cache03/sql/sql_parse.cc mysql-5.0.25-nightly-20060823.host_cache04/sql/sql_parse.cc
+--- mysql-5.0.25-nightly-20060823.host_cache03/sql/sql_parse.cc	2006-09-25 21:16:06.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache04/sql/sql_parse.cc	2006-09-25 21:41:05.000000000 -0700
+@@ -2687,6 +2687,10 @@
+   }
+ #endif
+ 
++   case SQLCOM_SHOW_HOST_CACHE:
++     res= mysqld_show_host_cache(thd);
++     break;
++
+   case SQLCOM_BACKUP_TABLE:
+   {
+     DBUG_ASSERT(first_table == all_tables && first_table != 0);
+diff -Nur mysql-5.0.25-nightly-20060823.host_cache03/sql/sql_prepare.cc mysql-5.0.25-nightly-20060823.host_cache04/sql/sql_prepare.cc
+--- mysql-5.0.25-nightly-20060823.host_cache03/sql/sql_prepare.cc	2006-09-25 21:16:06.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache04/sql/sql_prepare.cc	2006-09-25 21:36:51.000000000 -0700
+@@ -1735,6 +1735,7 @@
+   case SQLCOM_SHOW_VARIABLES:
+   case SQLCOM_SHOW_LOGS:
+   case SQLCOM_SHOW_TABLES:
++  case SQLCOM_SHOW_HOST_CACHE:
+   case SQLCOM_SHOW_OPEN_TABLES:
+   case SQLCOM_SHOW_CHARSETS:
+   case SQLCOM_SHOW_COLLATIONS:
+diff -Nur mysql-5.0.25-nightly-20060823.host_cache03/sql/sql_show.cc mysql-5.0.25-nightly-20060823.host_cache04/sql/sql_show.cc
+--- mysql-5.0.25-nightly-20060823.host_cache03/sql/sql_show.cc	2006-09-25 21:16:07.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache04/sql/sql_show.cc	2006-09-26 10:47:41.000000000 -0700
+@@ -47,6 +47,53 @@
+ view_store_create_info(THD *thd, TABLE_LIST *table, String *buff);
+ static bool schema_table_store_record(THD *thd, TABLE *table);
+ 
++int mysqld_show_host_cache(THD *thd)
++{
++  List<Item> field_list;
++  Protocol *protocol= thd->protocol;
++  Item *item;
++
++  char ip[16];
++  host_entry *cur;
++
++  DBUG_ENTER("mysqld_show_host_cache");
++
++  field_list.push_back(new Item_empty_string("IP", 15));
++  field_list.push_back(item= new Item_empty_string("Hostname", 255));
++  item->maybe_null= 1;
++  field_list.push_back(new Item_return_int("Errors", 10, 
++                                           MYSQL_TYPE_LONG));
++
++  if (protocol->send_fields(&field_list,
++                            Protocol::SEND_NUM_ROWS | Protocol::SEND_EOF))
++    DBUG_RETURN(TRUE);
++
++  (void) pthread_mutex_lock(&hostname_cache->lock);
++
++  for(cur= (host_entry *) hostname_cache->newest_element();
++      cur; cur= (host_entry *) cur->older_element())
++  {
++    uint32 nip = htonl(cur->ip);
++    sprintf(ip, "%u.%u.%u.%u",
++            (unsigned char)(nip>>24), (unsigned char)(nip>>16), 
++            (unsigned char)(nip>> 8), (unsigned char)(nip));
++    protocol->prepare_for_resend();
++    protocol->store(ip, system_charset_info);
++    if(cur->hostname)
++      protocol->store(cur->hostname, system_charset_info);
++    else
++      protocol->store_null();
++    protocol->store((uint)cur->errors);
++    if(protocol->write())
++      DBUG_RETURN(TRUE);
++  }
++
++  (void) pthread_mutex_unlock(&hostname_cache->lock);
++
++  send_eof(thd);
++  DBUG_RETURN(FALSE);
++}
++
+ 
+ /***************************************************************************
+ ** List all table types supported 
+diff -Nur mysql-5.0.25-nightly-20060823.host_cache03/sql/sql_yacc.yy mysql-5.0.25-nightly-20060823.host_cache04/sql/sql_yacc.yy
+--- mysql-5.0.25-nightly-20060823.host_cache03/sql/sql_yacc.yy	2006-09-25 21:16:06.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache04/sql/sql_yacc.yy	2006-09-25 21:44:07.000000000 -0700
+@@ -314,6 +314,7 @@
+ %token  HELP_SYM
+ %token  HEX_NUM
+ %token  HIGH_PRIORITY
++%token	HOST_SYM
+ %token  HOSTS_SYM
+ %token  HOUR_MICROSECOND_SYM
+ %token  HOUR_MINUTE_SYM
+@@ -6412,6 +6413,11 @@
+              if (prepare_schema_table(YYTHD, lex, 0, SCH_TABLES))
+                YYABORT;
+            }
++        | HOST_SYM CACHE_SYM 
++          {
++            LEX *lex= Lex;
++            lex->sql_command= SQLCOM_SHOW_HOST_CACHE;
++          }
+         | OPEN_SYM TABLES opt_db wild_and_where
+ 	  {
+ 	    LEX *lex= Lex;
+@@ -7619,6 +7625,7 @@
+ 	| GRANTS		{}
+ 	| GLOBAL_SYM		{}
+ 	| HASH_SYM		{}
++	| HOST_SYM		{}
+ 	| HOSTS_SYM		{}
+ 	| HOUR_SYM		{}
+ 	| IDENTIFIED_SYM	{}

@@ -1,0 +1,330 @@
+diff -Nur -x bdb mysql-5.0.25-nightly-20060823.orig/sql/item_create.cc mysql-5.0.25-nightly-20060823.caller/sql/item_create.cc
+--- mysql-5.0.25-nightly-20060823.orig/sql/item_create.cc	2006-08-22 23:09:17.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.caller/sql/item_create.cc	2006-10-01 16:01:20.000000000 -0700
+@@ -64,6 +64,21 @@
+   return new Item_func_bit_count(a);
+ }
+ 
++Item *create_func_caller(Item *a)
++{
++  return new Item_func_caller(a);
++}
++
++Item *create_func_caller_depth()
++{
++  return new Item_func_caller_depth();
++}
++
++Item *create_func_caller_ws(Item *a, Item *b)
++{
++  return new Item_func_caller_ws(a, b);
++}
++
+ Item *create_func_ceiling(Item* a)
+ {
+   return new Item_func_ceiling(a);
+diff -Nur -x bdb mysql-5.0.25-nightly-20060823.orig/sql/item_create.h mysql-5.0.25-nightly-20060823.caller/sql/item_create.h
+--- mysql-5.0.25-nightly-20060823.orig/sql/item_create.h	2006-08-22 23:09:16.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.caller/sql/item_create.h	2006-10-01 16:00:17.000000000 -0700
+@@ -25,6 +25,9 @@
+ Item *create_func_bin(Item* a);
+ Item *create_func_bit_count(Item* a);
+ Item *create_func_bit_length(Item* a);
++Item *create_func_caller(Item *a);
++Item *create_func_caller_depth();
++Item *create_func_caller_ws(Item *a, Item *b);
+ Item *create_func_coercibility(Item* a);
+ Item *create_func_ceiling(Item* a);
+ Item *create_func_char_length(Item* a);
+diff -Nur -x bdb mysql-5.0.25-nightly-20060823.orig/sql/item_func.cc mysql-5.0.25-nightly-20060823.caller/sql/item_func.cc
+--- mysql-5.0.25-nightly-20060823.orig/sql/item_func.cc	2006-08-22 23:09:21.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.caller/sql/item_func.cc	2006-10-01 16:08:49.000000000 -0700
+@@ -4688,6 +4688,22 @@
+   return ull->thread_id;
+ }
+ 
++longlong Item_func_caller_depth::val_int()
++{
++  DBUG_ASSERT(fixed == 1);
++  THD *thd= current_thd;
++
++  uint32 depth;
++  Query *query;
++  List_iterator<Query> it(thd->query_stack);
++
++  if(thd->query_stack.is_empty())
++    return 0;
++
++  for(depth=0; (query= it++); depth++)  { }
++
++  return depth;
++}
+ 
+ longlong Item_func_row_count::val_int()
+ {
+@@ -4697,7 +4713,6 @@
+   return thd->row_count_func;
+ }
+ 
+-
+ Item_func_sp::Item_func_sp(Name_resolution_context *context_arg, sp_name *name)
+   :Item_func(), context(context_arg), m_name(name), m_sp(NULL),
+    result_field(NULL)
+diff -Nur -x bdb mysql-5.0.25-nightly-20060823.orig/sql/item_func.h mysql-5.0.25-nightly-20060823.caller/sql/item_func.h
+--- mysql-5.0.25-nightly-20060823.orig/sql/item_func.h	2006-08-22 23:09:19.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.caller/sql/item_func.h	2006-10-01 16:04:03.000000000 -0700
+@@ -1370,6 +1370,16 @@
+ };
+ 
+ 
++class Item_func_caller_depth :public Item_int_func
++{
++public:
++  Item_func_caller_depth() :Item_int_func() {}
++  longlong val_int();
++  const char *func_name() const { return "caller_depth"; }
++  void fix_length_and_dec() { decimals= 0; maybe_null=0; }
++};
++
++
+ class Item_func_row_count :public Item_int_func
+ {
+ public:
+diff -Nur -x bdb mysql-5.0.25-nightly-20060823.orig/sql/item_strfunc.cc mysql-5.0.25-nightly-20060823.caller/sql/item_strfunc.cc
+--- mysql-5.0.25-nightly-20060823.orig/sql/item_strfunc.cc	2006-08-22 23:09:19.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.caller/sql/item_strfunc.cc	2006-10-01 17:07:58.000000000 -0700
+@@ -119,6 +119,90 @@
+ 	  (longlong) 0);
+ }
+ 
++String *Item_func_caller::val_str(String *str)
++{
++  THD *thd= current_thd;
++  uint32 cur= 1;
++  uint32 pos= 0;
++  Query *query;
++  List_iterator<Query> it(thd->query_stack);
++
++  if(arg_count)
++    pos= args[0]->val_int();
++
++  if(pos && thd->query_stack.is_empty())
++    goto invalid_stack;
++
++  null_value= 0;
++  if(pos == 0)
++  {
++    str->set(thd->query, thd->query_length, system_charset_info);
++  } else {
++    while((query= it++) && (++cur <= pos)) { }
++    if(!query)
++      goto invalid_stack;
++    str->set(query->query, query->query_length, system_charset_info);
++  }
++  return str;
++
++ invalid_stack:
++  null_value= 1;
++  return 0;
++}
++
++void Item_func_caller::fix_length_and_dec()
++{
++  //max_length= current_thd->;
++  maybe_null= 1;
++}
++
++
++String *Item_func_caller_ws::val_str(String *str)
++{
++  uint32 cur= 1;
++  uint32 pos= 0;
++  Query *query;
++  List_iterator<Query> it(current_thd->query_stack);
++  String sep, *psep;
++
++  if(arg_count) 
++  {
++    psep= args[0]->val_str(&sep);
++    pos= args[1]->val_int();
++  }
++
++  if(pos && current_thd->query_stack.is_empty())
++    goto invalid_stack;
++
++  null_value= 0;
++  if(pos == 0)
++  {
++    str->set(current_thd->query, current_thd->query_length, system_charset_info);
++  } else {
++    while((query= it++) && (++cur <= pos)) { }
++    if(!query)
++      goto invalid_stack;
++    str->set(query->query, query->query_length, system_charset_info);
++  }
++
++  while(query= it++)
++  {
++    str->append(psep->ptr());
++    str->append(query->query);
++  }
++  return str;
++
++ invalid_stack:
++  null_value= 1;
++  return 0;
++}
++
++void Item_func_caller_ws::fix_length_and_dec()
++{
++  //max_length= current_thd->;
++  maybe_null= 1;
++}
++
+ 
+ String *Item_func_md5::val_str(String *str)
+ {
+diff -Nur -x bdb mysql-5.0.25-nightly-20060823.orig/sql/item_strfunc.h mysql-5.0.25-nightly-20060823.caller/sql/item_strfunc.h
+--- mysql-5.0.25-nightly-20060823.orig/sql/item_strfunc.h	2006-08-22 23:09:17.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.caller/sql/item_strfunc.h	2006-10-01 16:02:15.000000000 -0700
+@@ -39,6 +39,27 @@
+   String *check_well_formed_result(String *str);
+ };
+ 
++class Item_func_caller :public Item_str_func
++{
++  String tmp_value;
++public:
++  Item_func_caller(Item *a) :Item_str_func(a) {}
++  String *val_str(String *);
++  void fix_length_and_dec();
++  const char *func_name() const { return "caller"; }
++};
++
++class Item_func_caller_ws :public Item_str_func
++{
++  String tmp_value;
++public:
++  Item_func_caller_ws(Item *a, Item *b) :Item_str_func(a, b) {}
++  String *val_str(String *);
++  void fix_length_and_dec();
++  const char *func_name() const { return "caller_ws"; }
++};
++
++
+ class Item_func_md5 :public Item_str_func
+ {
+   String tmp_value;
+diff -Nur -x bdb mysql-5.0.25-nightly-20060823.orig/sql/lex.h mysql-5.0.25-nightly-20060823.caller/sql/lex.h
+--- mysql-5.0.25-nightly-20060823.orig/sql/lex.h	2006-08-22 23:09:20.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.caller/sql/lex.h	2006-10-01 16:00:27.000000000 -0700
+@@ -564,6 +564,9 @@
+   { "BIT_OR",		SYM(BIT_OR)},
+   { "BIT_AND",		SYM(BIT_AND)},
+   { "BIT_XOR",		SYM(BIT_XOR)},
++  { "CALLER",           F_SYM(FUNC_ARG1),0,CREATE_FUNC(create_func_caller)},
++  { "CALLER_DEPTH",     F_SYM(FUNC_ARG0),0,CREATE_FUNC(create_func_caller_depth)},
++  { "CALLER_WS",        F_SYM(FUNC_ARG2),0,CREATE_FUNC(create_func_caller_ws)},
+   { "CAST",		SYM(CAST_SYM)},
+   { "CEIL",		F_SYM(FUNC_ARG1),0,CREATE_FUNC(create_func_ceiling)},
+   { "CEILING",		F_SYM(FUNC_ARG1),0,CREATE_FUNC(create_func_ceiling)},
+diff -Nur -x bdb mysql-5.0.25-nightly-20060823.orig/sql/sp_head.cc mysql-5.0.25-nightly-20060823.caller/sql/sp_head.cc
+--- mysql-5.0.25-nightly-20060823.orig/sql/sp_head.cc	2006-08-22 23:09:17.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.caller/sql/sp_head.cc	2006-10-01 12:08:32.000000000 -0700
+@@ -2419,14 +2419,11 @@
+ int
+ sp_instr_stmt::execute(THD *thd, uint *nextp)
+ {
+-  char *query;
+-  uint32 query_length;
+   int res;
+   DBUG_ENTER("sp_instr_stmt::execute");
+   DBUG_PRINT("info", ("command: %d", m_lex_keeper.sql_command()));
+ 
+-  query= thd->query;
+-  query_length= thd->query_length;
++  thd->query_stack.push_front(new Query(thd->query, thd->query_length));
+   if (!(res= alloc_query(thd, m_query.str, m_query.length+1)) &&
+       !(res=subst_spvars(thd, this, &m_query)))
+   {
+@@ -2442,8 +2439,7 @@
+     }
+     else
+       *nextp= m_ip+1;
+-    thd->query= query;
+-    thd->query_length= query_length;
++    thd->query_stack.pop()->get(&thd->query, &thd->query_length);
+   }
+   DBUG_RETURN(res);
+ }
+diff -Nur -x bdb mysql-5.0.25-nightly-20060823.orig/sql/sql_class.cc mysql-5.0.25-nightly-20060823.caller/sql/sql_class.cc
+--- mysql-5.0.25-nightly-20060823.orig/sql/sql_class.cc	2006-08-22 23:09:20.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.caller/sql/sql_class.cc	2006-10-01 11:58:12.000000000 -0700
+@@ -1580,6 +1580,35 @@
+ }
+ 
+ /*
++  Query functions for query stack
++*/
++
++Query::Query()
++{
++  query= NULL;
++  query_length= 0;
++}
++
++Query::Query(char *in_query, uint32 in_query_length)
++{
++  query= NULL;
++  query_length= 0;
++  set(in_query, in_query_length);
++}
++
++void Query::set(char *in_query, uint32 in_query_length)
++{
++  query= in_query;
++  query_length= in_query_length;
++}
++
++void Query::get(char **out_query, uint32 *out_query_length)
++{
++  *out_query= query;
++  *out_query_length= query_length;
++}
++  
++/*
+   Statement functions 
+ */
+ 
+diff -Nur -x bdb mysql-5.0.25-nightly-20060823.orig/sql/sql_class.h mysql-5.0.25-nightly-20060823.caller/sql/sql_class.h
+--- mysql-5.0.25-nightly-20060823.orig/sql/sql_class.h	2006-08-22 23:09:20.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.caller/sql/sql_class.h	2006-10-01 12:20:07.000000000 -0700
+@@ -748,6 +748,19 @@
+ 
+ class Server_side_cursor;
+ 
++class Query: public ilink
++{
++public:
++  char *query;
++  uint32 query_length;
++
++  Query();
++  Query(char *in_query, uint32 in_query_length);
++
++  void set(char *in_query, uint32 in_query_length);
++  void get(char **out_query, uint32 *out_query_length);
++};
++
+ /*
+   State of a single command executed against this connection.
+   One connection can contain a lot of simultaneously running statements,
+@@ -811,6 +824,8 @@
+   uint32 query_length;                          // current query length
+   Server_side_cursor *cursor;
+ 
++  List<Query> query_stack;
++
+ public:
+ 
+   /* This constructor is called for backup statements */

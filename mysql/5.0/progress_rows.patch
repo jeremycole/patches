@@ -1,0 +1,56 @@
+--- mysql-5.0.33/sql/sql_show.cc	2007-01-09 04:51:20.000000000 -0800
++++ mysql-5.0.33.jcole/sql/sql_show.cc	2007-02-07 20:12:55.000000000 -0800
+@@ -1265,6 +1265,7 @@
+   uint   command;
+   const char *user,*host,*db,*proc_info,*state_info;
+   char *query;
++  uint32 row_count;
+ };
+ 
+ #ifdef HAVE_EXPLICIT_TEMPLATE_INSTANTIATION
+@@ -1292,6 +1293,10 @@
+   field->maybe_null=1;
+   field_list.push_back(field=new Item_empty_string("Info",max_query_length));
+   field->maybe_null=1;
++
++  if(verbose)
++    field_list.push_back(new Item_return_int("Progress_rows", 11, FIELD_TYPE_LONG));
++  
+   if (protocol->send_fields(&field_list,
+                             Protocol::SEND_NUM_ROWS | Protocol::SEND_EOF))
+     DBUG_VOID_RETURN;
+@@ -1357,6 +1362,7 @@
+ #else
+         thd_info->start_time= tmp->start_time;
+ #endif
++        thd_info->row_count= tmp->row_count;
+         thd_info->query=0;
+         if (tmp->query)
+         {
+@@ -1393,6 +1399,8 @@
+       protocol->store_null();
+     protocol->store(thd_info->state_info, system_charset_info);
+     protocol->store(thd_info->query, system_charset_info);
++    if(verbose)
++      protocol->store((uint32) thd_info->row_count);
+     if (protocol->write())
+       break; /* purecov: inspected */
+   }
+--- mysql-5.0.33/sql/sql_parse.cc	2007-01-09 04:51:48.000000000 -0800
++++ mysql-5.0.33.jcole/sql/sql_parse.cc	2007-02-07 20:33:56.000000000 -0800
+@@ -2135,6 +2135,7 @@
+   thd->command=COM_SLEEP;
+   thd->query=0;
+   thd->query_length=0;
++  thd->row_count= 0;
+   thread_running--;
+   VOID(pthread_mutex_unlock(&LOCK_thread_count));
+   thd->packet.shrink(thd->variables.net_buffer_length);	// Reclaim some memory
+@@ -5632,6 +5633,7 @@
+     thd->total_warn_count=0;			// Warnings for this query
+     thd->rand_used= 0;
+     thd->sent_row_count= thd->examined_row_count= 0;
++    thd->row_count= 0;
+   }
+   DBUG_VOID_RETURN;
+ }

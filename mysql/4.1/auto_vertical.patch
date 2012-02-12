@@ -1,0 +1,163 @@
+diff -Naur mysql-4.1.15/client/client_priv.h mysql-4.1.15-hacked/client/client_priv.h
+--- mysql-4.1.15/client/client_priv.h	2005-10-09 16:46:39.000000000 -0600
++++ mysql-4.1.15-hacked/client/client_priv.h	2005-11-04 20:20:18.000000000 -0700
+@@ -50,5 +50,5 @@
+   ,OPT_NDBCLUSTER,OPT_NDB_CONNECTSTRING
+ #endif
+   ,OPT_IGNORE_TABLE,OPT_INSERT_IGNORE,OPT_DROP_DATABASE,
+-  OPT_AUTO_CLOSE
++  OPT_AUTO_CLOSE, OPT_AUTO_VERTICAL_OUTPUT
+ };
+diff -Naur mysql-4.1.15/client/mysql.cc mysql-4.1.15-hacked/client/mysql.cc
+--- mysql-4.1.15/client/mysql.cc	2005-10-09 16:46:34.000000000 -0600
++++ mysql-4.1.15-hacked/client/mysql.cc	2005-11-10 23:16:08.000000000 -0700
+@@ -135,7 +135,7 @@
+                opt_xml=0,opt_nopager=1, opt_outfile=0, named_cmds= 0,
+ 	       tty_password= 0, opt_nobeep=0, opt_reconnect=1,
+ 	       default_charset_used= 0, opt_secure_auth= 0,
+-               default_pager_set= 0, opt_sigint_ignore= 0;
++               default_pager_set= 0, opt_sigint_ignore= 0, auto_vertical_output = 0;
+ static ulong opt_max_allowed_packet, opt_net_buffer_length;
+ static uint verbose=0,opt_silent=0,opt_mysql_port=0, opt_local_infile=0;
+ static my_string opt_mysql_unix_port=0;
+@@ -166,6 +166,7 @@
+ static uint prompt_counter;
+ static char delimiter[16]= DEFAULT_DELIMITER;
+ static uint delimiter_length= 1;
++static int terminal_width = 80;
+ 
+ #ifdef HAVE_SMEM
+ static char *shared_memory_base_name=0;
+@@ -214,6 +215,8 @@
+ static char *get_arg(char *line, my_bool get_next_arg);
+ static void init_username();
+ static void add_int_to_prompt(int toadd);
++static int get_result_width(MYSQL_RES *res);
++static int get_field_disp_length(MYSQL_FIELD * field);
+ 
+ /* A structure which contains information on the commands this program
+    can understand. */
+@@ -325,6 +328,9 @@
+ static void mysql_end_timer(ulong start_time,char *buff);
+ static void nice_time(double sec,char *buff,bool part_second);
+ static sig_handler mysql_end(int sig);
++#if defined(HAVE_TERMIOS_H)
++static sig_handler window_resize(int sig);
++#endif
+ 
+ 
+ int main(int argc,char *argv[])
+@@ -334,6 +340,7 @@
+   char *emb_argv[3];
+   int emb_argc= 1;
+ 
++
+   emb_argv[0]= argv[0];
+   get_defaults_files(argc, argv, &defaults, &extra_defaults);
+   if (defaults)
+@@ -411,6 +418,13 @@
+     signal(SIGINT, mysql_end);			// Catch SIGINT to clean up
+   signal(SIGQUIT, mysql_end);			// Catch SIGQUIT to clean up
+ 
++#if defined(HAVE_TERMIOS_H)
++  //Readline will call this if it installs a handler
++  signal(SIGWINCH, window_resize);
++  //call the SIGWINCH handler to get the default term width
++  window_resize(0);
++#endif
++
+   /*
+     Run in interactive mode like the ingres/postgres monitor
+   */
+@@ -501,6 +515,15 @@
+   exit(status.exit_status);
+ }
+ 
++#if defined(HAVE_TERMIOS_H)
++sig_handler window_resize(int sig)
++{
++  struct winsize window_size;
++
++  if (!ioctl(fileno(stdin), TIOCGWINSZ, &window_size))
++    terminal_width = (int) window_size.ws_col;
++}
++#endif
+ 
+ static struct my_option my_long_options[] =
+ {
+@@ -515,6 +538,9 @@
+   {"auto-rehash", OPT_AUTO_REHASH,
+    "Enable automatic rehashing. One doesn't need to use 'rehash' to get table and field completion, but startup and reconnecting may take a longer time. Disable with --disable-auto-rehash.",
+    (gptr*) &rehash, (gptr*) &rehash, 0, GET_BOOL, NO_ARG, 1, 0, 0, 0, 0, 0},
++  {"auto-vertical-output", OPT_AUTO_VERTICAL_OUTPUT,
++   "Automatically switch to vertical output mode if the result is wider than the terminal width.",
++   (gptr*) &auto_vertical_output, (gptr*) &auto_vertical_output, 0, GET_BOOL, NO_ARG, 0, 0, 0, 0, 0, 0},
+   {"no-auto-rehash", 'A',
+    "No automatic rehashing. One has to use 'rehash' to get table and field completion. This gives a quicker start of mysql and disables rehashing on reconnect. WARNING: options deprecated; use --disable-auto-rehash instead.",
+    0, 0, 0, GET_NO_ARG, NO_ARG, 0, 0, 0, 0, 0, 0},
+@@ -1940,11 +1966,12 @@
+       else
+       {
+ 	init_pager();
++
+ 	if (opt_html)
+ 	  print_table_data_html(result);
+ 	else if (opt_xml)
+ 	  print_table_data_xml(result);
+-	else if (vertical)
++  else if (vertical || (auto_vertical_output && terminal_width < get_result_width(result)))
+ 	  print_table_data_vertically(result);
+ 	else if (opt_silent && verbose <= 2 && !output_tables)
+ 	  print_tab_data(result);
+@@ -2092,15 +2119,8 @@
+   separator.copy("+",1,charset_info);
+   while ((field = mysql_fetch_field(result)))
+   {
+-    uint length= column_names ? field->name_length : 0;
+-    if (quick)
+-      length=max(length,field->length);
+-    else
+-      length=max(length,field->max_length);
+-    if (length < 4 && !IS_NOT_NULL(field->flags))
+-      length=4;					// Room for "NULL"
+-    field->max_length=length+1;
+-    separator.fill(separator.length()+length+2,'-');
++    field->max_length=get_field_disp_length(field);
++    separator.fill(separator.length()+field->max_length+1,'-');
+     separator.append('+');
+   }
+   separator.append('\0');                       // End marker for \0
+@@ -2248,6 +2268,33 @@
+   }
+ }
+ 
++static int get_field_disp_length(MYSQL_FIELD * field)
++{
++  uint length = column_names ? field->name_length : 0;
++
++  if (quick)
++    length=max(length,field->length);
++  else
++    length=max(length,field->max_length);
++
++  if (length < 4 && !IS_NOT_NULL(field->flags))
++    length=4;					// Room for "NULL"
++
++  return length + 1;	
++}
++
++static int get_result_width(MYSQL_RES *result)
++{
++  unsigned int len = 0;
++  MYSQL_FIELD *field;
++
++  while ((field = mysql_fetch_field(result)))
++    len += get_field_disp_length(field) + 2;
++
++  mysql_field_seek(result, 0);	
++
++  return len + 1;	
++}
+ 
+ static const char
+ *array_value(const char **array, char key)

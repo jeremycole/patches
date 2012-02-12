@@ -1,0 +1,27 @@
+--- sql/sql_parse.cc.orig	2006-04-25 15:02:33.000000000 -0700
++++ sql/sql_parse.cc	2006-04-25 18:23:01.000000000 -0700
+@@ -2596,6 +2595,24 @@
+ 			      (1L << (uint) MYSQL_ERROR::WARN_LEVEL_ERROR));
+     break;
+   }
++  case SQLCOM_SHOW_PROFILES:
++  {
++    thd->profiling.store();
++    thd->profiling.discard();
++    res= thd->profiling.show_profiles();
++    break;
++  }
++  case SQLCOM_SHOW_PROFILE:
++  {
++    thd->profiling.store();
++    thd->profiling.discard(); // will get re-enabled by reset()
++    if(lex->profile_query_id) {
++      res= thd->profiling.show(lex->profile_options, lex->profile_query_id);
++    } else {
++      res= thd->profiling.show_last(lex->profile_options);
++    }
++    break;
++  }
+   case SQLCOM_SHOW_NEW_MASTER:
+   {
+     if (check_global_access(thd, REPL_SLAVE_ACL))

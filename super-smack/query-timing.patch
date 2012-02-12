@@ -1,0 +1,10 @@
+--- super-smack-1.3/src/query.cc	2005-04-30 06:51:29.000000000 -0700
++++ super-smack-1.3.jcole/src/query.cc	2006-06-07 18:34:42.000000000 -0700
+@@ -99,6 +99,7 @@
+       gettimeofday(&end, NULL);
+       int q_time = (end.tv_sec - start.tv_sec)*1000 +
+ 	(end.tv_usec - start.tv_usec)/1000;
++      printf("Query type: %s  Time: %i\n", query.type_name.c_str(), q_time);
+       cli->qb->update_report(query.type_name, q_time);
+     }
+ }

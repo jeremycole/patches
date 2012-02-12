@@ -1,0 +1,229 @@
+diff -Nur -x bdb mysql-5.0.26/sql/sql_show.cc mysql-5.0.26.show_for_connection/sql/sql_show.cc
+--- mysql-5.0.26/sql/sql_show.cc	2006-10-04 04:24:21.000000000 -0700
++++ mysql-5.0.26.show_for_connection/sql/sql_show.cc	2006-10-30 12:22:10.000000000 -0800
+@@ -3489,14 +3489,79 @@
+ int fill_variables(THD *thd, TABLE_LIST *tables, COND *cond)
+ {
+   DBUG_ENTER("fill_variables");
+-  int res= 0;
++  int error= 0;
+   LEX *lex= thd->lex;
+   const char *wild= lex->wild ? lex->wild->ptr() : NullS;
++  Item *thd_item;
++  THD *show_thd= thd;
++  THD *find_thd= NULL;
++  ulong thd_id= 0;
++  
++  thd_item= lex->value_list.head();
++  /*
++     If no thread specified, don't try to get the value, this will
++     be a null pointer.
++  */
++  if (thd_item)
++  {
++    if ((!thd_item->fixed && thd_item->fix_fields(thd, &thd_item))
++         || thd_item->check_cols(1))
++    {
++      my_message(ER_SET_CONSTANTS_ONLY, ER(ER_SET_CONSTANTS_ONLY), MYF(0));
++      DBUG_RETURN(ER_SET_CONSTANTS_ONLY);
++    } 
++    thd_id= (ulong)thd_item->val_int();
++  }
++
++  /*
++     If the thd_id matches the current thread id, we can skip the search
++     as well as skip the lock.
++  */
++     
++  if (thd_id == thd->thread_id)
++    thd_id= 0;
++
++  /* 
++     If we need to search for a thread, we need to lock the list,
++     search for a matching thread id, and check permissions.  If
++     all checks pass, we'll have a new valid show_thd.  Otherwise
++     the function will go ahead and error out.
++   */
++  if (thd_id)
++  {
++    VOID(pthread_mutex_lock(&LOCK_thread_count)); /* no unlink from list */
++    I_List_iterator<THD> iter(threads);
++    while ((find_thd= iter++))
++    {
++      if (find_thd->thread_id == thd_id)
++        break;
++    }
++    if (!find_thd)
++    {
++      error= ER_NO_SUCH_THREAD;
++      my_error(error, MYF(0), thd_id);
++      goto unlock_and_return;
++    }
++    if (!((thd->security_ctx->master_access & SUPER_ACL)
++        || !strcmp(thd->security_ctx->user, find_thd->security_ctx->user)))
++    {
++      error= ER_SPECIFIC_ACCESS_DENIED_ERROR;
++      my_error(error, MYF(0), "SUPER");
++      goto unlock_and_return;
++    }
++
++    show_thd= find_thd;
++  }
++
+   pthread_mutex_lock(&LOCK_global_system_variables);
+-  res= show_status_array(thd, wild, init_vars, 
+-                         lex->option_type, 0, "", tables->table);
++  error= show_status_array(show_thd, wild, init_vars, 
++                           lex->option_type, 0, "", tables->table);
+   pthread_mutex_unlock(&LOCK_global_system_variables);
+-  DBUG_RETURN(res);
++
++unlock_and_return:
++  if (thd_id)
++    VOID(pthread_mutex_unlock(&LOCK_thread_count));
++  DBUG_RETURN(error);
+ }
+ 
+ 
+@@ -3505,17 +3570,82 @@
+   DBUG_ENTER("fill_status");
+   LEX *lex= thd->lex;
+   const char *wild= lex->wild ? lex->wild->ptr() : NullS;
+-  int res= 0;
++  int error= 0;
+   STATUS_VAR tmp;
++  Item *thd_item;
++  THD *show_thd= thd;
++  THD *find_thd= NULL;
++  ulong thd_id= 0;
++  
++  thd_item= lex->value_list.head();
++  /*
++     If no thread specified, don't try to get the value, this will
++     be a null pointer.
++  */
++  if (thd_item)
++  {
++    if ((!thd_item->fixed && thd_item->fix_fields(thd, &thd_item))
++         || thd_item->check_cols(1))
++    {
++      my_message(ER_SET_CONSTANTS_ONLY, ER(ER_SET_CONSTANTS_ONLY), MYF(0));
++      DBUG_RETURN(ER_SET_CONSTANTS_ONLY);
++    } 
++    thd_id= (ulong)thd_item->val_int();
++  }
++
++  /*
++     If the thd_id matches the current thread id, we can skip the search
++     as well as skip the lock.  Same situation if we're looking
++     for a global status.
++  */
++  if (thd_id == thd->thread_id || lex->option_type == OPT_GLOBAL)
++    thd_id= 0;
++
++  /* 
++     If we need to search for a thread, we need to lock the list,
++     search for a matching thread id, and check permissions.  If
++     all checks pass, we'll have a new valid show_thd.  Otherwise
++     the function will go ahead and error out.
++   */
++  if (thd_id)
++  {
++    VOID(pthread_mutex_lock(&LOCK_thread_count)); /* no unlink from list */
++    I_List_iterator<THD> iter(threads);
++    while ((find_thd= iter++))
++    {
++      if (find_thd->thread_id == thd_id)
++        break;
++    }
++    if (!find_thd)
++    {
++      error= ER_NO_SUCH_THREAD;
++      my_error(error, MYF(0), thd_id);
++      goto unlock_and_return;
++    }
++    if (!((thd->security_ctx->master_access & SUPER_ACL)
++        || !strcmp(thd->security_ctx->user, find_thd->security_ctx->user)))
++    {
++      error= ER_SPECIFIC_ACCESS_DENIED_ERROR;
++      my_error(error, MYF(0), "SUPER");
++      goto unlock_and_return;
++    }
++
++    show_thd= find_thd;
++  }
++
+   ha_update_statistics();                    /* Export engines statistics */
+   pthread_mutex_lock(&LOCK_status);
+   if (lex->option_type == OPT_GLOBAL)
+     calc_sum_of_all_status(&tmp);
+-  res= show_status_array(thd, wild, status_vars, OPT_GLOBAL,
++  error= show_status_array(show_thd, wild, status_vars, OPT_GLOBAL,
+                          (lex->option_type == OPT_GLOBAL ? 
+-                          &tmp: &thd->status_var), "",tables->table);
++                          &tmp: &show_thd->status_var), "",tables->table);
+   pthread_mutex_unlock(&LOCK_status);
+-  DBUG_RETURN(res);
++  
++unlock_and_return:
++  if (thd_id)
++    VOID(pthread_mutex_unlock(&LOCK_thread_count));
++  DBUG_RETURN(error);
+ }
+ 
+ 
+diff -Nur -x bdb mysql-5.0.26/sql/sql_yacc.yy mysql-5.0.26.show_for_connection/sql/sql_yacc.yy
+--- mysql-5.0.26/sql/sql_yacc.yy	2006-10-04 04:24:23.000000000 -0700
++++ mysql-5.0.26.show_for_connection/sql/sql_yacc.yy	2006-10-30 12:25:41.000000000 -0800
+@@ -758,6 +758,7 @@
+ 	sp_opt_default
+ 	simple_ident_nospvar simple_ident_q
+         field_or_var limit_option
++	opt_for_conn
+ 
+ %type <item_num>
+ 	NUM_literal
+@@ -6542,12 +6543,14 @@
+           { Lex->sql_command = SQLCOM_SHOW_WARNS;}
+         | ERRORS opt_limit_clause_init
+           { Lex->sql_command = SQLCOM_SHOW_ERRORS;}
+-        | opt_var_type STATUS_SYM wild_and_where
++        | opt_var_type STATUS_SYM wild_and_where opt_for_conn
+           {
+             LEX *lex= Lex;
+             lex->sql_command= SQLCOM_SELECT;
+             lex->orig_sql_command= SQLCOM_SHOW_STATUS;
+             lex->option_type= $1;
++	    lex->value_list.empty();
++	    lex->value_list.push_back($4);
+             if (prepare_schema_table(YYTHD, lex, 0, SCH_STATUS))
+               YYABORT;
+ 	  }	
+@@ -6557,12 +6560,14 @@
+           { Lex->sql_command = SQLCOM_SHOW_MUTEX_STATUS; }
+ 	| opt_full PROCESSLIST_SYM
+ 	  { Lex->sql_command= SQLCOM_SHOW_PROCESSLIST;}
+-        | opt_var_type  VARIABLES wild_and_where
++        | opt_var_type VARIABLES wild_and_where opt_for_conn
+ 	  {
+             LEX *lex= Lex;
+             lex->sql_command= SQLCOM_SELECT;
+             lex->orig_sql_command= SQLCOM_SHOW_VARIABLES;
+             lex->option_type= $1;
++	    lex->value_list.empty();
++	    lex->value_list.push_front($4);
+             if (prepare_schema_table(YYTHD, lex, 0, SCH_VARIABLES))
+               YYABORT;
+ 	  }
+@@ -6757,6 +6762,11 @@
+         }
+       ;
+ 
++opt_for_conn:
++      /* empty */                   { $$= 0;  }
++      | FOR_SYM CONNECTION_SYM expr { $$= $3; }
++      ;
++
+ 
+ /* A Oracle compatible synonym for show */
+ describe:

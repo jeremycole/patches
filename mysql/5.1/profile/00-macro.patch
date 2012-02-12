@@ -1,0 +1,1457 @@
+===== libmysqld/lib_sql.cc 1.114 vs edited =====
+--- 1.114/libmysqld/lib_sql.cc	2006-04-10 09:34:07 -07:00
++++ edited/libmysqld/lib_sql.cc	2006-04-29 11:37:35 -07:00
+@@ -579,7 +579,7 @@
+ 
+   if (thd->variables.max_join_size == HA_POS_ERROR)
+     thd->options |= OPTION_BIG_SELECTS;
+-  thd->proc_info=0;				// Remove 'login'
++  THD_PROC_INFO(thd, 0);				// Remove 'login'
+   thd->command=COM_SLEEP;
+   thd->version=refresh_version;
+   thd->set_time();
+===== sql/event_executor.cc 1.43 vs edited =====
+--- 1.43/sql/event_executor.cc	2006-04-15 18:17:25 -07:00
++++ edited/sql/event_executor.cc	2006-04-29 11:37:36 -07:00
+@@ -297,7 +297,7 @@
+   VOID(pthread_sigmask(SIG_UNBLOCK,&set,&thd->block_signals));
+ #endif
+ 
+-  thd->proc_info= "Initialized";
++  THD_PROC_INFO(thd, "Initialized");
+   thd->version= refresh_version;
+   thd->set_time();
+   DBUG_RETURN(0);
+@@ -498,7 +498,7 @@
+     cnt++;
+     DBUG_PRINT("info", ("EVEX External Loop %d thd->k", cnt));
+ 
+-    thd->proc_info = "Sleeping";
++    THD_PROC_INFO(thd, "Sleeping");
+     if (!event_executor_running_global_var)
+     {
+       sql_print_information("SCHEDULER: Asked to stop.");
+@@ -652,7 +652,7 @@
+   /* ... then we can thrash the whole queue at once */
+   evex_queue_destroy(&EVEX_EQ_NAME);
+ 
+-  thd->proc_info = "Clearing";
++  THD_PROC_INFO(thd, "Clearing");
+   DBUG_ASSERT(thd->net.buff != 0);
+   net_end(&thd->net); // destructor will not free it, because we are weird
+   THD_CHECK_SENTRY(thd);
+@@ -773,7 +773,7 @@
+   */
+   VOID(pthread_mutex_unlock(&LOCK_thread_count));
+ 
+-  thd->proc_info = "Clearing";
++  THD_PROC_INFO(thd, "Clearing");
+   DBUG_ASSERT(thd->net.buff != 0);
+   net_end(&thd->net); // destructor will not free it, because we are weird
+   THD_CHECK_SENTRY(thd);
+===== sql/ha_archive.cc 1.86 vs edited =====
+--- 1.86/sql/ha_archive.cc	2006-04-16 21:54:57 -07:00
++++ edited/sql/ha_archive.cc	2006-04-29 11:37:36 -07:00
+@@ -1498,7 +1498,7 @@
+   ha_rows count= share->rows_recorded;
+   DBUG_ENTER("ha_archive::check");
+ 
+-  thd->proc_info= "Checking table";
++  THD_PROC_INFO(thd, "Checking table");
+   /* Flush any waiting data */
+   azflush(&(share->archive_write), Z_SYNC_FLUSH);
+   share->forced_flushes++;
+@@ -1523,7 +1523,7 @@
+ 
+   my_free((char*)buf, MYF(0));
+ 
+-  thd->proc_info= old_proc_info;
++  THD_PROC_INFO(thd, old_proc_info);
+ 
+   if ((rc && rc != HA_ERR_END_OF_FILE) || count)  
+   {
+===== sql/ha_myisam.cc 1.175 vs edited =====
+--- 1.175/sql/ha_myisam.cc	2006-03-29 03:27:30 -08:00
++++ edited/sql/ha_myisam.cc	2006-04-29 11:37:36 -07:00
+@@ -386,7 +386,7 @@
+   MYISAM_SHARE* share = file->s;
+   const char *old_proc_info=thd->proc_info;
+ 
+-  thd->proc_info="Checking table";
++  THD_PROC_INFO(thd, "Checking table");
+   myisamchk_init(&param);
+   param.thd = thd;
+   param.op_name =   "check";
+@@ -460,7 +460,7 @@
+     file->update |= HA_STATE_CHANGED | HA_STATE_ROW_CHANGED;
+   }
+ 
+-  thd->proc_info=old_proc_info;
++  THD_PROC_INFO(thd, old_proc_info);
+   return error ? HA_ADMIN_CORRUPT : HA_ADMIN_OK;
+ }
+ 
+@@ -724,22 +724,22 @@
+         char buf[40];
+         /* TODO: respect myisam_repair_threads variable */
+         my_snprintf(buf, 40, "Repair with %d threads", my_count_bits(key_map));
+-        thd->proc_info=buf;
++        THD_PROC_INFO(thd, buf);
+         error = mi_repair_parallel(&param, file, fixed_name,
+             param.testflag & T_QUICK);
+-        thd->proc_info="Repair done"; // to reset proc_info, as
++        THD_PROC_INFO(thd, "Repair done"); // to reset proc_info, as
+                                       // it was pointing to local buffer
+       }
+       else
+       {
+-        thd->proc_info="Repair by sorting";
++        THD_PROC_INFO(thd, "Repair by sorting");
+         error = mi_repair_by_sort(&param, file, fixed_name,
+             param.testflag & T_QUICK);
+       }
+     }
+     else
+     {
+-      thd->proc_info="Repair with keycache";
++      THD_PROC_INFO(thd, "Repair with keycache");
+       param.testflag &= ~T_REP_BY_SORT;
+       error=  mi_repair(&param, file, fixed_name,
+ 			param.testflag & T_QUICK);
+@@ -753,7 +753,7 @@
+ 	(share->state.changed & STATE_NOT_SORTED_PAGES))
+     {
+       optimize_done=1;
+-      thd->proc_info="Sorting index";
++      THD_PROC_INFO(thd, "Sorting index");
+       error=mi_sort_index(&param,file,fixed_name);
+     }
+     if (!statistics_done && (local_testflag & T_STATISTICS))
+@@ -761,14 +761,14 @@
+       if (share->state.changed & STATE_NOT_ANALYZED)
+       {
+ 	optimize_done=1;
+-	thd->proc_info="Analyzing";
++	THD_PROC_INFO(thd, "Analyzing");
+ 	error = chk_key(&param, file);
+       }
+       else
+ 	local_testflag&= ~T_STATISTICS;		// Don't update statistics
+     }
+   }
+-  thd->proc_info="Saving state";
++  THD_PROC_INFO(thd, "Saving state");
+   if (!error)
+   {
+     if ((share->state.changed & STATE_CHANGED) || mi_is_crashed(file))
+@@ -806,7 +806,7 @@
+     file->update |= HA_STATE_CHANGED | HA_STATE_ROW_CHANGED;
+     update_state_info(&param, file, 0);
+   }
+-  thd->proc_info=old_proc_info;
++  THD_PROC_INFO(thd, old_proc_info);
+   if (!thd->locked_tables)
+     mi_lock_database(file,F_UNLCK);
+   DBUG_RETURN(error ? HA_ADMIN_FAILED :
+@@ -1031,7 +1031,7 @@
+     THD *thd=current_thd;
+     MI_CHECK param;
+     const char *save_proc_info=thd->proc_info;
+-    thd->proc_info="Creating index";
++    THD_PROC_INFO(thd, "Creating index");
+     myisamchk_init(&param);
+     param.op_name= "recreating_index";
+     param.testflag= (T_SILENT | T_REP_BY_SORT | T_QUICK |
+@@ -1056,7 +1056,7 @@
+         thd->clear_error();
+     }
+     info(HA_STATUS_CONST);
+-    thd->proc_info=save_proc_info;
++    THD_PROC_INFO(thd, save_proc_info);
+   }
+   else
+   {
+===== sql/ha_ndbcluster_binlog.cc 1.47 vs edited =====
+--- 1.47/sql/ha_ndbcluster_binlog.cc	2006-04-21 09:27:53 -07:00
++++ edited/sql/ha_ndbcluster_binlog.cc	2006-04-29 12:23:12 -07:00
+@@ -412,8 +412,7 @@
+     ulonglong wait_epoch= g_latest_trans_gci;
+     int count= 30;
+     if (thd)
+-      thd->proc_info= "Waiting for ndbcluster binlog update to "
+-	"reach current position";
++      THD_PROC_INFO(thd, "Waiting for ndbcluster binlog update to reach current position");
+     while (count && ndb_binlog_running &&
+            ndb_latest_handled_binlog_epoch < wait_epoch)
+     {
+@@ -421,7 +420,7 @@
+       sleep(1);
+     }
+     if (thd)
+-      thd->proc_info= save_info;
++      THD_PROC_INFO(thd, save_info);
+     DBUG_VOID_RETURN;
+   }
+ }
+@@ -1957,7 +1956,7 @@
+   tables->db= repdb;
+   tables->alias= tables->table_name= reptable;
+   tables->lock_type= TL_WRITE;
+-  thd->proc_info= "Opening " NDB_REP_DB "." NDB_REP_TABLE;
++  THD_PROC_INFO(thd, "Opening " NDB_REP_DB "." NDB_REP_TABLE);
+   tables->required_type= FRMTYPE_TABLE;
+   uint counter;
+   thd->clear_error();
+@@ -1966,11 +1965,11 @@
+     sql_print_error("NDB Binlog: Opening binlog_index: %d, '%s'",
+                     thd->net.last_errno,
+                     thd->net.last_error ? thd->net.last_error : "");
+-    thd->proc_info= save_proc_info;
++    THD_PROC_INFO(thd, save_proc_info);
+     return -1;
+   }
+   *binlog_index= tables->table;
+-  thd->proc_info= save_proc_info;
++  THD_PROC_INFO(thd, save_proc_info);
+   return 0;
+ }
+ 
+@@ -2084,11 +2083,11 @@
+ {
+   DBUG_ENTER("ndbcluster_binlog_close_connection");
+   const char *save_info= thd->proc_info;
+-  thd->proc_info= "ndbcluster_binlog_close_connection";
++  THD_PROC_INFO(thd, "ndbcluster_binlog_close_connection");
+   do_ndbcluster_binlog_close_connection= 1;
+   while (ndb_binlog_thread_running > 0)
+     sleep(1);
+-  thd->proc_info= save_info;
++  THD_PROC_INFO(thd, save_info);
+   DBUG_VOID_RETURN;
+ }
+ 
+@@ -3197,7 +3196,7 @@
+   pthread_mutex_unlock(&injector_mutex);
+   pthread_cond_signal(&injector_cond);
+ 
+-  thd->proc_info= "Waiting for ndbcluster to start";
++  THD_PROC_INFO(thd, "Waiting for ndbcluster to start");
+ 
+   pthread_mutex_lock(&injector_mutex);
+   while (!schema_share ||
+@@ -3249,7 +3248,7 @@
+     /*
+       now we don't want any events before next gci is complete
+     */
+-    thd->proc_info= "Waiting for event from ndbcluster";
++    THD_PROC_INFO(thd, "Waiting for event from ndbcluster");
+     thd->set_time();
+     
+     /* wait for event or 1000 ms */
+@@ -3291,7 +3290,7 @@
+ 
+     if (unlikely(schema_res > 0))
+     {
+-      thd->proc_info= "Processing events from schema table";
++      THD_PROC_INFO(thd, "Processing events from schema table");
+       s_ndb->
+         setReportThreshEventGCISlip(ndb_report_thresh_binlog_epoch_slip);
+       s_ndb->
+@@ -3316,7 +3315,7 @@
+     if (res > 0)
+     {
+       DBUG_PRINT("info", ("pollEvents res: %d", res));
+-      thd->proc_info= "Processing events";
++      THD_PROC_INFO(thd, "Processing events");
+       NdbEventOperation *pOp= i_ndb->nextEvent();
+       Binlog_index_row row;
+       while (pOp != NULL)
+@@ -3488,7 +3487,7 @@
+         if (trans.good())
+         {
+           //DBUG_ASSERT(row.n_inserts || row.n_updates || row.n_deletes);
+-          thd->proc_info= "Committing events to binlog";
++          THD_PROC_INFO(thd, "Committing events to binlog");
+           injector::transaction::binlog_pos start= trans.start_pos();
+           if (int r= trans.commit())
+           {
+@@ -3529,7 +3528,7 @@
+   }
+ err:
+   DBUG_PRINT("info",("Shutting down cluster binlog thread"));
+-  thd->proc_info= "Shutting down";
++  THD_PROC_INFO(thd, "Shutting down");
+   close_thread_tables(thd);
+   pthread_mutex_lock(&injector_mutex);
+   /* don't mess with the injector_ndb anymore from other threads */
+===== sql/item_func.cc 1.287 vs edited =====
+--- 1.287/sql/item_func.cc	2006-04-25 07:20:39 -07:00
++++ edited/sql/item_func.cc	2006-04-29 11:37:36 -07:00
+@@ -3083,7 +3083,7 @@
+     Structure is now initialized.  Try to get the lock.
+     Set up control struct to allow others to abort locks
+   */
+-  thd->proc_info="User lock";
++  THD_PROC_INFO(thd, "User lock");
+   thd->mysys_var->current_mutex= &LOCK_user_locks;
+   thd->mysys_var->current_cond=  &ull->cond;
+ 
+@@ -3108,7 +3108,7 @@
+   }
+   pthread_mutex_unlock(&LOCK_user_locks);
+   pthread_mutex_lock(&thd->mysys_var->mutex);
+-  thd->proc_info=0;
++  THD_PROC_INFO(thd, 0);
+   thd->mysys_var->current_mutex= 0;
+   thd->mysys_var->current_cond=  0;
+   pthread_mutex_unlock(&thd->mysys_var->mutex);
+@@ -3189,7 +3189,7 @@
+     Structure is now initialized.  Try to get the lock.
+     Set up control struct to allow others to abort locks.
+   */
+-  thd->proc_info="User lock";
++  THD_PROC_INFO(thd, "User lock");
+   thd->mysys_var->current_mutex= &LOCK_user_locks;
+   thd->mysys_var->current_cond=  &ull->cond;
+ 
+@@ -3226,7 +3226,7 @@
+   pthread_mutex_unlock(&LOCK_user_locks);
+ 
+   pthread_mutex_lock(&thd->mysys_var->mutex);
+-  thd->proc_info=0;
++  THD_PROC_INFO(thd, 0);
+   thd->mysys_var->current_mutex= 0;
+   thd->mysys_var->current_cond=  0;
+   pthread_mutex_unlock(&thd->mysys_var->mutex);
+===== sql/lock.cc 1.91 vs edited =====
+--- 1.91/sql/lock.cc	2006-04-25 01:57:27 -07:00
++++ edited/sql/lock.cc	2006-04-29 11:37:36 -07:00
+@@ -151,7 +151,7 @@
+       }
+     }
+ 
+-    thd->proc_info="System lock";
++    THD_PROC_INFO(thd, "System lock");
+     DBUG_PRINT("info", ("thd->proc_info %s", thd->proc_info));
+     if (lock_external(thd, tables, count))
+     {
+@@ -161,7 +161,7 @@
+       sql_lock=0;
+       break;
+     }
+-    thd->proc_info="Table lock";
++    THD_PROC_INFO(thd, "Table lock");
+     DBUG_PRINT("info", ("thd->proc_info %s", thd->proc_info));
+     thd->locked=1;
+     /* Copy the lock data array. thr_multi_lock() reorders its contens. */
+@@ -196,7 +196,7 @@
+       thd->locked=0;
+       break;
+     }
+-    thd->proc_info=0;
++    THD_PROC_INFO(thd, 0);
+ 
+     /* some table was altered or deleted. reopen tables marked deleted */
+     mysql_unlock_tables(thd,sql_lock);
+@@ -211,7 +211,7 @@
+     if (wait_for_tables(thd))
+       break;					// Couldn't open tables
+   }
+-  thd->proc_info=0;
++  THD_PROC_INFO(thd, 0);
+   if (thd->killed)
+   {
+     thd->send_kill_message();
+===== sql/log_event.cc 1.220 vs edited =====
+--- 1.220/sql/log_event.cc	2006-04-12 12:19:14 -07:00
++++ edited/sql/log_event.cc	2006-04-29 11:37:36 -07:00
+@@ -4311,7 +4311,7 @@
+   bzero((char*)&file, sizeof(file));
+   fname_buf= strmov(proc_info, "Making temp file ");
+   ext= slave_load_file_stem(fname_buf, file_id, server_id, ".info");
+-  thd->proc_info= proc_info;
++  THD_PROC_INFO(thd, proc_info);
+   my_delete(fname_buf, MYF(0)); // old copy may exist already
+   if ((fd= my_create(fname_buf, CREATE_MODE,
+ 		     O_WRONLY | O_BINARY | O_EXCL | O_NOFOLLOW,
+@@ -4361,7 +4361,7 @@
+     end_io_cache(&file);
+   if (fd >= 0)
+     my_close(fd, MYF(0));
+-  thd->proc_info= 0;
++  THD_PROC_INFO(thd, 0);
+   return error ? 1 : Log_event::exec_event(rli);
+ }
+ #endif /* defined(HAVE_REPLICATION) && !defined(MYSQL_CLIENT) */
+@@ -4481,7 +4481,7 @@
+ 
+   fname= strmov(proc_info, "Making temp file ");
+   slave_load_file_stem(fname, file_id, server_id, ".data");
+-  thd->proc_info= proc_info;
++  THD_PROC_INFO(thd, proc_info);
+   if (get_create_or_append())
+   {
+     my_delete(fname, MYF(0)); // old copy may exist already
+@@ -4515,7 +4515,7 @@
+ err:
+   if (fd >= 0)
+     my_close(fd, MYF(0));
+-  thd->proc_info= 0;
++  THD_PROC_INFO(thd, 0);
+   DBUG_RETURN(error ? error : Log_event::exec_event(rli));
+ }
+ #endif
+===== sql/mysql_priv.h 1.394 vs edited =====
+--- 1.394/sql/mysql_priv.h	2006-04-22 17:00:03 -07:00
++++ edited/sql/mysql_priv.h	2006-04-29 11:40:09 -07:00
+@@ -510,6 +510,10 @@
+ #include "sql_udf.h"
+ #include "sql_partition.h"
+ 
++#ifndef THD_PROC_INFO
++#define THD_PROC_INFO(thd, msg) (thd)->proc_info= (msg);
++#endif
++
+ class user_var_entry;
+ class Security_context;
+ enum enum_var_type
+===== sql/repl_failsafe.cc 1.64 vs edited =====
+--- 1.64/sql/repl_failsafe.cc	2006-04-15 18:17:25 -07:00
++++ edited/sql/repl_failsafe.cc	2006-04-29 11:37:37 -07:00
+@@ -93,7 +93,7 @@
+   if (thd->variables.max_join_size == HA_POS_ERROR)
+     thd->options|= OPTION_BIG_SELECTS;
+ 
+-  thd->proc_info="Thread initialized";
++  THD_PROC_INFO(thd, "Thread initialized");
+   thd->version=refresh_version;
+   thd->set_time();
+   DBUG_RETURN(0);
+@@ -599,7 +599,7 @@
+   {
+     bool break_req_chain = 0;
+     pthread_cond_wait(&COND_rpl_status, &LOCK_rpl_status);
+-    thd->proc_info="Processing request";
++    THD_PROC_INFO(thd, "Processing request");
+     while (!break_req_chain)
+     {
+       switch (rpl_status) {
+@@ -942,7 +942,7 @@
+       goto err;
+     }
+   }
+-  thd->proc_info="purging old relay logs";
++  THD_PROC_INFO(thd, "purging old relay logs");
+   if (purge_relay_logs(&active_mi->rli,thd,
+ 		       0 /* not only reset, but also reinit */,
+ 		       &errmsg))
+@@ -969,7 +969,7 @@
+   flush_relay_log_info(&active_mi->rli);
+   pthread_cond_broadcast(&active_mi->rli.data_cond);
+   pthread_mutex_unlock(&active_mi->rli.data_lock);
+-  thd->proc_info = "starting slave";
++  THD_PROC_INFO(thd, "starting slave");
+   if (restart_thread_mask)
+   {
+     error=start_slave_threads(0 /* mutex not needed */,
+@@ -981,7 +981,7 @@
+ err:
+   unlock_slave_threads(active_mi);
+   pthread_mutex_unlock(&LOCK_active_mi);
+-  thd->proc_info = 0;
++  THD_PROC_INFO(thd, 0);
+ 
+   mysql_close(&mysql); // safe to call since we always do mysql_init()
+   if (!error)
+===== sql/slave.cc 1.270 vs edited =====
+--- 1.270/sql/slave.cc	2006-04-15 18:17:25 -07:00
++++ edited/sql/slave.cc	2006-04-29 12:11:55 -07:00
+@@ -1301,7 +1301,7 @@
+   /* Create the table. We do not want to log the "create table" statement */
+   save_options = thd->options;
+   thd->options &= ~(ulong) (OPTION_BIN_LOG);
+-  thd->proc_info = "Creating table from master dump";
++  THD_PROC_INFO(thd, "Creating table from master dump");
+   // save old db in case we are creating in a different database
+   save_db = thd->db;
+   save_db_length= thd->db_length;
+@@ -1316,7 +1316,7 @@
+   if (thd->query_error)
+     goto err;			// mysql_parse took care of the error send
+ 
+-  thd->proc_info = "Opening master dump table";
++  THD_PROC_INFO(thd, "Opening master dump table");
+   tables.lock_type = TL_WRITE;
+   if (!open_ltable(thd, &tables, TL_WRITE))
+   {
+@@ -1325,7 +1325,7 @@
+   }
+   
+   file = tables.table->file;
+-  thd->proc_info = "Reading master dump table data";
++  THD_PROC_INFO(thd, "Reading master dump table data");
+   /* Copy the data file */
+   if (file->net_read_dump(net))
+   {
+@@ -1337,7 +1337,7 @@
+ 
+   check_opt.init();
+   check_opt.flags|= T_VERY_SILENT | T_CALC_CHECKSUM | T_QUICK;
+-  thd->proc_info = "Rebuilding the index on master dump table";
++  THD_PROC_INFO(thd, "Rebuilding the index on master dump table");
+   /*
+     We do not want repair() to spam us with messages
+     just send them to the error log, and report the failure in case of
+@@ -2608,9 +2608,11 @@
+ #endif
+ 
+   if (thd_type == SLAVE_THD_SQL)
+-    thd->proc_info= "Waiting for the next event in relay log";
+-  else
+-    thd->proc_info= "Waiting for master update";
++  {
++    THD_PROC_INFO(thd, "Waiting for the next event in relay log");
++  } else {
++    THD_PROC_INFO(thd, "Waiting for master update");
++  }
+   thd->version=refresh_version;
+   thd->set_time();
+   DBUG_RETURN(0);
+@@ -3203,7 +3205,7 @@
+     goto err;
+   }
+ 
+-  thd->proc_info = "Connecting to master";
++  THD_PROC_INFO(thd, "Connecting to master");
+   // we can get killed during safe_connect
+   if (!safe_connect(thd, mysql, mi))
+     sql_print_information("Slave I/O thread: connected to master '%s@%s:%d',\
+@@ -3222,7 +3224,7 @@
+   // TODO: the assignment below should be under mutex (5.0)
+   mi->slave_running= MYSQL_SLAVE_RUN_CONNECT;
+   thd->slave_net = &mysql->net;
+-  thd->proc_info = "Checking master version";
++  THD_PROC_INFO(thd, "Checking master version");
+   if (get_master_version_and_clock(mysql, mi))
+     goto err;
+ 
+@@ -3233,7 +3235,7 @@
+       If fails, this is not fatal - we just print the error message and go
+       on with life.
+     */
+-    thd->proc_info = "Registering slave on master";
++    THD_PROC_INFO(thd, "Registering slave on master");
+     if (register_slave_on_master(mysql) ||  update_slave_list(mysql, mi))
+       goto err;
+   }
+@@ -3242,7 +3244,7 @@
+   while (!io_slave_killed(thd,mi))
+   {
+     bool suppress_warnings= 0;
+-    thd->proc_info = "Requesting binlog dump";
++    THD_PROC_INFO(thd, "Requesting binlog dump");
+     if (request_dump(mysql, mi, &suppress_warnings))
+     {
+       sql_print_error("Failed on request_dump()");
+@@ -3254,7 +3256,7 @@
+       }
+ 
+       mi->slave_running= MYSQL_SLAVE_RUN_NOT_CONNECT;
+-      thd->proc_info= "Waiting to reconnect after a failed binlog dump request";
++      THD_PROC_INFO(thd, "Waiting to reconnect after a failed binlog dump request");
+ #ifdef SIGNAL_WITH_VIO_CLOSE
+       thd->clear_active_vio();
+ #endif
+@@ -3278,7 +3280,7 @@
+ 	goto err;
+       }
+ 
+-      thd->proc_info = "Reconnecting after a failed binlog dump request";
++      THD_PROC_INFO(thd, "Reconnecting after a failed binlog dump request");
+       if (!suppress_warnings)
+ 	sql_print_error("Slave I/O thread: failed dump request, \
+ reconnecting to try again, log '%s' at postion %s", IO_RPL_LOG_NAME,
+@@ -3303,7 +3305,7 @@
+          important thing is to not confuse users by saying "reading" whereas
+          we're in fact receiving nothing.
+       */
+-      thd->proc_info = "Waiting for master to send event";
++      THD_PROC_INFO(thd, "Waiting for master to send event");
+       ulong event_len = read_event(mysql, mi, &suppress_warnings);
+       if (io_slave_killed(thd,mi))
+       {
+@@ -3331,7 +3333,7 @@
+ 	  goto err;
+ 	}
+         mi->slave_running= MYSQL_SLAVE_RUN_NOT_CONNECT;
+-	thd->proc_info = "Waiting to reconnect after a failed master event read";
++	THD_PROC_INFO(thd, "Waiting to reconnect after a failed master event read");
+ #ifdef SIGNAL_WITH_VIO_CLOSE
+         thd->clear_active_vio();
+ #endif
+@@ -3350,7 +3352,7 @@
+ reconnect after a failed read");
+ 	  goto err;
+ 	}
+-	thd->proc_info = "Reconnecting after a failed master event read";
++	THD_PROC_INFO(thd, "Reconnecting after a failed master event read");
+ 	if (!suppress_warnings)
+ 	  sql_print_information("Slave I/O thread: Failed reading log event, \
+ reconnecting to retry, log '%s' position %s", IO_RPL_LOG_NAME,
+@@ -3367,7 +3369,7 @@
+       } // if (event_len == packet_error)
+ 
+       retry_count=0;			// ok event, reset retry counter
+-      thd->proc_info = "Queueing master event to the relay log";
++      THD_PROC_INFO(thd, "Queueing master event to the relay log");
+       if (queue_event(mi,(const char*)mysql->net.read_pos + 1,
+ 		      event_len))
+       {
+@@ -3429,7 +3431,7 @@
+     mi->mysql=0;
+   }
+   write_ignored_events_info_to_relay_log(thd, mi);
+-  thd->proc_info = "Waiting for slave mutex on exit";
++  THD_PROC_INFO(thd, "Waiting for slave mutex on exit");
+   pthread_mutex_lock(&mi->run_lock);
+   mi->slave_running = 0;
+   mi->io_thd = 0;
+@@ -3593,7 +3595,7 @@
+ 
+   while (!sql_slave_killed(thd,rli))
+   {
+-    thd->proc_info = "Reading event from the relay log";
++    THD_PROC_INFO(thd, "Reading event from the relay log");
+     DBUG_ASSERT(rli->sql_thd == thd);
+     THD_CHECK_SENTRY(thd);
+     if (exec_relay_log_event(thd,rli))
+@@ -3660,7 +3662,7 @@
+   thd->query= thd->db= thd->catalog= 0; 
+   thd->query_length= thd->db_length= 0;
+   VOID(pthread_mutex_unlock(&LOCK_thread_count));
+-  thd->proc_info = "Waiting for slave mutex on exit";
++  THD_PROC_INFO(thd, "Waiting for slave mutex on exit");
+   pthread_mutex_lock(&rli->run_lock);
+   /* We need data_lock, at least to wake up any waiting master_pos_wait() */
+   pthread_mutex_lock(&rli->data_lock);
+===== sql/sp_head.cc 1.217 vs edited =====
+--- 1.217/sql/sp_head.cc	2006-04-25 07:09:27 -07:00
++++ edited/sql/sp_head.cc	2006-04-29 11:37:37 -07:00
+@@ -2223,9 +2223,9 @@
+ 
+   m_lex->unit.cleanup();
+ 
+-  thd->proc_info="closing tables";
++  THD_PROC_INFO(thd, "closing tables");
+   close_thread_tables(thd);
+-  thd->proc_info= 0;
++  THD_PROC_INFO(thd, 0);
+ 
+   if (m_lex->query_tables_own_last)
+   {
+===== sql/sql_base.cc 1.318 vs edited =====
+--- 1.318/sql/sql_base.cc	2006-04-25 12:53:41 -07:00
++++ edited/sql/sql_base.cc	2006-04-29 11:37:37 -07:00
+@@ -871,7 +871,7 @@
+     */
+     thd->mysys_var->current_mutex= &LOCK_open;
+     thd->mysys_var->current_cond= &COND_refresh;
+-    thd->proc_info="Flushing tables";
++    THD_PROC_INFO(thd, "Flushing tables");
+ 
+     close_old_data_files(thd,thd->open_tables,1,1);
+     mysql_ha_flush(thd, tables, MYSQL_HA_REOPEN_ON_USAGE | MYSQL_HA_FLUSH_ALL,
+@@ -914,7 +914,7 @@
+     pthread_mutex_lock(&thd->mysys_var->mutex);
+     thd->mysys_var->current_mutex= 0;
+     thd->mysys_var->current_cond= 0;
+-    thd->proc_info=0;
++    THD_PROC_INFO(thd, 0);
+     pthread_mutex_unlock(&thd->mysys_var->mutex);
+   }
+   DBUG_RETURN(result);
+@@ -1682,7 +1682,7 @@
+   thd->mysys_var->current_mutex= mutex;
+   thd->mysys_var->current_cond= cond;
+   proc_info=thd->proc_info;
+-  thd->proc_info="Waiting for table";
++  THD_PROC_INFO(thd, "Waiting for table");
+   if (!thd->killed)
+     (void) pthread_cond_wait(cond, mutex);
+ 
+@@ -1701,7 +1701,7 @@
+   pthread_mutex_lock(&thd->mysys_var->mutex);
+   thd->mysys_var->current_mutex= 0;
+   thd->mysys_var->current_cond= 0;
+-  thd->proc_info= proc_info;
++  THD_PROC_INFO(thd, proc_info);
+   pthread_mutex_unlock(&thd->mysys_var->mutex);
+ }
+ 
+@@ -2402,7 +2402,7 @@
+   bool result;
+   DBUG_ENTER("wait_for_tables");
+ 
+-  thd->proc_info="Waiting for tables";
++  THD_PROC_INFO(thd, "Waiting for tables");
+   pthread_mutex_lock(&LOCK_open);
+   while (!thd->killed)
+   {
+@@ -2418,12 +2418,12 @@
+   else
+   {
+     /* Now we can open all tables without any interference */
+-    thd->proc_info="Reopen tables";
++    THD_PROC_INFO(thd, "Reopen tables");
+     thd->version= refresh_version;
+     result=reopen_tables(thd,0,0);
+   }
+   pthread_mutex_unlock(&LOCK_open);
+-  thd->proc_info=0;
++  THD_PROC_INFO(thd, 0);
+   DBUG_RETURN(result);
+ }
+ 
+@@ -2819,7 +2819,7 @@
+  restart:
+   *counter= 0;
+   query_tables_last_own= 0;
+-  thd->proc_info="Opening tables";
++  THD_PROC_INFO(thd, "Opening tables");
+ 
+   /*
+     If we are not already executing prelocked statement and don't have
+@@ -2999,7 +2999,7 @@
+   }
+ 
+  err:
+-  thd->proc_info=0;
++  THD_PROC_INFO(thd, 0);
+   free_root(&new_frm_mem, MYF(0));              // Free pre-alloced block
+ 
+   if (query_tables_last_own)
+@@ -3073,7 +3073,7 @@
+   bool refresh;
+   DBUG_ENTER("open_ltable");
+ 
+-  thd->proc_info="Opening table";
++  THD_PROC_INFO(thd, "Opening table");
+   thd->current_tablenr= 0;
+   /* open_ltable can be used only for BASIC TABLEs */
+   table_list->required_type= FRMTYPE_TABLE;
+@@ -3107,7 +3107,7 @@
+ 	  table= 0;
+     }
+   }
+-  thd->proc_info=0;
++  THD_PROC_INFO(thd, 0);
+   DBUG_RETURN(table);
+ }
+ 
+@@ -6140,7 +6140,7 @@
+     List_iterator<Item_func_match> li(*(select_lex->ftfunc_list));
+     Item_func_match *ifm;
+     DBUG_PRINT("info",("Performing FULLTEXT search"));
+-    thd->proc_info="FULLTEXT initialization";
++    THD_PROC_INFO(thd, "FULLTEXT initialization");
+ 
+     while ((ifm=li++))
+       ifm->init_search(no_order);
+===== sql/sql_class.cc 1.256 vs edited =====
+--- 1.256/sql/sql_class.cc	2006-04-25 07:09:27 -07:00
++++ edited/sql/sql_class.cc	2006-04-29 11:37:37 -07:00
+@@ -182,7 +182,7 @@
+ const char *thd_proc_info(THD *thd, const char *info)
+ {
+   const char *old_info= thd->proc_info;
+-  thd->proc_info= info;
++  THD_PROC_INFO(thd, info);
+   return old_info;
+ }
+ 
+===== sql/sql_delete.cc 1.180 vs edited =====
+--- 1.180/sql/sql_delete.cc	2006-04-11 03:15:49 -07:00
++++ edited/sql/sql_delete.cc	2006-04-29 11:37:37 -07:00
+@@ -52,7 +52,7 @@
+ 	     table_list->view_db.str, table_list->view_name.str);
+     DBUG_RETURN(TRUE);
+   }
+-  thd->proc_info="init";
++  THD_PROC_INFO(thd, "init");
+   table->map=1;
+ 
+   if (mysql_prepare_delete(thd, table_list, &conds))
+@@ -213,7 +213,7 @@
+     init_read_record_idx(&info, thd, table, 1, usable_index);
+ 
+   init_ftfuncs(thd, select_lex, 1);
+-  thd->proc_info="updating";
++  THD_PROC_INFO(thd, "updating");
+   will_batch= !table->file->start_bulk_delete();
+ 
+   /*
+@@ -281,7 +281,7 @@
+       table->file->print_error(loc_error,MYF(0));
+     error=1;
+   }
+-  thd->proc_info= "end";
++  THD_PROC_INFO(thd, "end");
+   end_read_record(&info);
+   free_io_cache(table);				// Will not do any harm
+   if (options & OPTION_QUICK)
+@@ -524,7 +524,7 @@
+   DBUG_ENTER("multi_delete::prepare");
+   unit= u;
+   do_delete= 1;
+-  thd->proc_info="deleting from main table";
++  THD_PROC_INFO(thd, "deleting from main table");
+   DBUG_RETURN(0);
+ }
+ 
+@@ -796,7 +796,7 @@
+ 
+ bool multi_delete::send_eof()
+ {
+-  thd->proc_info="deleting from reference tables";
++  THD_PROC_INFO(thd, "deleting from reference tables");
+ 
+   /* Does deletes for the last n - 1 tables, returns 0 if ok */
+   int local_error= do_deletes();		// returns 0 if success
+@@ -805,7 +805,7 @@
+   local_error= local_error || error;
+ 
+   /* reset used flags */
+-  thd->proc_info="end";
++  THD_PROC_INFO(thd, "end");
+ 
+   /*
+     We must invalidate the query cache before binlog writing and
+===== sql/sql_insert.cc 1.198 vs edited =====
+--- 1.198/sql/sql_insert.cc	2006-04-17 16:40:08 -07:00
++++ edited/sql/sql_insert.cc	2006-04-29 12:06:45 -07:00
+@@ -348,7 +348,7 @@
+   if (res || thd->is_fatal_error)
+     DBUG_RETURN(TRUE);
+ 
+-  thd->proc_info="init";
++  THD_PROC_INFO(thd, "init");
+   thd->used_tables=0;
+   values= its++;
+ 
+@@ -412,7 +412,7 @@
+ 
+   error=0;
+   id=0;
+-  thd->proc_info="update";
++  THD_PROC_INFO(thd, "update");
+   if (duplic != DUP_ERROR || ignore)
+     table->file->extra(HA_EXTRA_IGNORE_DUP_KEY);
+   /*
+@@ -610,7 +610,7 @@
+       thd->lock=0;
+     }
+   }
+-  thd->proc_info="end";
++  THD_PROC_INFO(thd, "end");
+   table->next_number_field=0;
+   thd->count_cuted_fields= CHECK_FIELD_IGNORE;
+   thd->next_insert_id=0;			// Reset this if wrongly used
+@@ -1345,7 +1345,7 @@
+ 
+ delayed_insert *find_handler(THD *thd, TABLE_LIST *table_list)
+ {
+-  thd->proc_info="waiting for delay_list";
++  THD_PROC_INFO(thd, "waiting for delay_list");
+   pthread_mutex_lock(&LOCK_delayed_insert);	// Protect master list
+   I_List_iterator<delayed_insert> it(delayed_threads);
+   delayed_insert *tmp;
+@@ -1382,7 +1382,7 @@
+     */
+     if (delayed_insert_threads >= thd->variables.max_insert_delayed_threads)
+       DBUG_RETURN(0);
+-    thd->proc_info="Creating delayed handler";
++    THD_PROC_INFO(thd, "Creating delayed handler");
+     pthread_mutex_lock(&LOCK_delayed_create);
+     /*
+       The first search above was done without LOCK_delayed_create.
+@@ -1436,7 +1436,7 @@
+       }
+ 
+       /* Wait until table is open */
+-      thd->proc_info="waiting for handler open";
++      THD_PROC_INFO(thd, "waiting for handler open");
+       while (!tmp->thd.killed && !tmp->table && !thd->killed)
+       {
+ 	pthread_cond_wait(&tmp->cond_client,&tmp->mutex);
+@@ -1447,7 +1447,7 @@
+         everyone, who might want to set a global read lock.
+       */
+       start_waiting_global_read_lock(thd);
+-      thd->proc_info="got old table";
++      THD_PROC_INFO(thd, "got old table");
+       if (tmp->thd.killed)
+       {
+ 	if (tmp->thd.is_fatal_error)
+@@ -1512,13 +1512,13 @@
+   tables_in_use++;
+   if (!thd.lock)				// Table is not locked
+   {
+-    client_thd->proc_info="waiting for handler lock";
++    THD_PROC_INFO(client_thd, "waiting for handler lock");
+     pthread_cond_signal(&cond);			// Tell handler to lock table
+     while (!dead && !thd.lock && ! client_thd->killed)
+     {
+       pthread_cond_wait(&cond_client,&mutex);
+     }
+-    client_thd->proc_info="got handler lock";
++    THD_PROC_INFO(client_thd, "got handler lock");
+     if (client_thd->killed)
+       goto error;
+     if (dead)
+@@ -1529,7 +1529,7 @@
+     }
+   }
+ 
+-  client_thd->proc_info="allocating local table";
++  THD_PROC_INFO(client_thd, "allocating local table");
+   copy= (TABLE*) client_thd->alloc(sizeof(*copy)+
+ 				   (share->fields+1)*sizeof(Field**)+
+ 				   share->reclength);
+@@ -1596,11 +1596,11 @@
+   delayed_insert *di=thd->di;
+   DBUG_ENTER("write_delayed");
+ 
+-  thd->proc_info="waiting for handler insert";
++  THD_PROC_INFO(thd, "waiting for handler insert");
+   pthread_mutex_lock(&di->mutex);
+   while (di->stacked_inserts >= delayed_queue_size && !thd->killed)
+     pthread_cond_wait(&di->cond_client,&di->mutex);
+-  thd->proc_info="storing row into queue";
++  THD_PROC_INFO(thd, "storing row into queue");
+ 
+   if (thd->killed || !(row= new delayed_row(duplic, ignore, log_on)))
+     goto err;
+===== sql/sql_parse.cc 1.541 vs edited =====
+--- 1.541/sql/sql_parse.cc	2006-04-26 07:28:25 -07:00
++++ edited/sql/sql_parse.cc	2006-04-29 11:37:37 -07:00
+@@ -1059,7 +1059,7 @@
+   Vio* save_vio;
+   ulong save_client_capabilities;
+ 
+-  thd->proc_info= "Execution of init_command";
++  THD_PROC_INFO(thd, "Execution of init_command");
+   /*
+     We need to lock init_command_var because
+     during execution of init_command_var query
+@@ -1159,7 +1159,7 @@
+       net->compress=1;				// Use compression
+ 
+     thd->version= refresh_version;
+-    thd->proc_info= 0;
++    THD_PROC_INFO(thd, 0);
+     thd->command= COM_SLEEP;
+     thd->set_time();
+     thd->init_for_queries();
+@@ -1169,7 +1169,7 @@
+       execute_init_command(thd, &sys_init_connect, &LOCK_sys_init_connect);
+       if (thd->query_error)
+ 	thd->killed= THD::KILL_CONNECTION;
+-      thd->proc_info=0;
++      THD_PROC_INFO(thd, 0);
+       thd->set_time();
+       thd->init_for_queries();
+     }
+@@ -1252,7 +1252,7 @@
+   if (thd->variables.max_join_size == HA_POS_ERROR)
+     thd->options |= OPTION_BIG_SELECTS;
+ 
+-  thd->proc_info=0;
++  THD_PROC_INFO(thd, 0);
+   thd->version=refresh_version;
+   thd->security_ctx->priv_user=
+     thd->security_ctx->user= (char*) my_strdup("boot", MYF(MY_WME));
+@@ -2083,7 +2083,7 @@
+   if (thd->lock || thd->open_tables || thd->derived_tables ||
+       thd->prelocked_mode)
+   {
+-    thd->proc_info="closing tables";
++    THD_PROC_INFO(thd, "closing tables");
+     close_thread_tables(thd);			/* Free tables */
+   }
+   /*
+@@ -2106,9 +2106,9 @@
+ 
+   log_slow_statement(thd);
+ 
+-  thd->proc_info="cleaning up";
++  THD_PROC_INFO(thd, "cleaning up");
+   VOID(pthread_mutex_lock(&LOCK_thread_count)); // For process list
+-  thd->proc_info=0;
++  THD_PROC_INFO(thd, 0);
+   thd->command=COM_SLEEP;
+   thd->query=0;
+   thd->query_length=0;
+@@ -2142,7 +2142,7 @@
+   */
+   if (thd->enable_slow_log && !thd->user_time)
+   {
+-    thd->proc_info="logging slow query";
++    THD_PROC_INFO(thd, "logging slow query");
+ 
+     if ((ulong) (thd->start_time - thd->time_after_lock) >
+ 	thd->variables.long_query_time ||
+@@ -3440,7 +3440,7 @@
+     if (add_item_to_list(thd, new Item_null()))
+       goto error;
+ 
+-    thd->proc_info="init";
++    THD_PROC_INFO(thd, "init");
+     if ((res= open_and_lock_tables(thd, all_tables)))
+       break;
+ 
+@@ -5112,7 +5112,7 @@
+   }
+ 
+ end:
+-  thd->proc_info="query end";
++  THD_PROC_INFO(thd, "query end");
+ 
+   /*
+     Binlog-related cleanup:
+@@ -5901,7 +5901,7 @@
+         lex->et= NULL;
+       }
+     }
+-    thd->proc_info="freeing items";
++    THD_PROC_INFO(thd, "freeing items");
+     thd->end_statement();
+     thd->cleanup_after_query();
+     DBUG_ASSERT(thd->change_list.is_empty());
+===== sql/sql_partition.cc 1.67 vs edited =====
+--- 1.67/sql/sql_partition.cc	2006-04-22 01:38:14 -07:00
++++ edited/sql/sql_partition.cc	2006-04-29 11:37:37 -07:00
+@@ -3502,7 +3502,7 @@
+   int error;
+   DBUG_ENTER("fast_end_partition");
+ 
+-  thd->proc_info="end";
++  THD_PROC_INFO(thd, "end");
+   if (!is_empty)
+     query_cache_invalidate3(thd, table_list, 0);
+   error= ha_commit_stmt(thd);
+===== sql/sql_repl.cc 1.153 vs edited =====
+--- 1.153/sql/sql_repl.cc	2006-04-21 10:18:29 -07:00
++++ edited/sql/sql_repl.cc	2006-04-29 11:37:37 -07:00
+@@ -641,7 +641,7 @@
+ 
+ 	if (read_packet)
+ 	{
+-	  thd->proc_info = "Sending binlog event to slave";
++	  THD_PROC_INFO(thd, "Sending binlog event to slave");
+ 	  if (my_net_write(net, (char*)packet->ptr(), packet->length()) )
+ 	  {
+ 	    errmsg = "Failed on my_net_write()";
+@@ -679,7 +679,7 @@
+       bool loop_breaker = 0;
+       /* need this to break out of the for loop from switch */
+ 
+-      thd->proc_info = "Finished reading one binlog; switching to next binlog";
++      THD_PROC_INFO(thd, "Finished reading one binlog; switching to next binlog");
+       switch (mysql_bin_log.find_next_log(&linfo, 1)) {
+       case LOG_INFO_EOF:
+ 	loop_breaker = (flags & BINLOG_DUMP_NON_BLOCK);
+@@ -725,14 +725,14 @@
+   (void)my_close(file, MYF(MY_WME));
+ 
+   send_eof(thd);
+-  thd->proc_info = "Waiting to finalize termination";
++  THD_PROC_INFO(thd, "Waiting to finalize termination");
+   pthread_mutex_lock(&LOCK_thread_count);
+   thd->current_linfo = 0;
+   pthread_mutex_unlock(&LOCK_thread_count);
+   DBUG_VOID_RETURN;
+ 
+ err:
+-  thd->proc_info = "Waiting to finalize termination";
++  THD_PROC_INFO(thd, "Waiting to finalize termination");
+   end_io_cache(&log);
+   /*
+     Exclude  iteration through thread list
+@@ -884,7 +884,7 @@
+ 
+   if (check_access(thd, SUPER_ACL, any_db,0,0,0,0))
+     return 1;
+-  thd->proc_info = "Killing slave";
++  THD_PROC_INFO(thd, "Killing slave");
+   int thread_mask;
+   lock_slave_threads(mi);
+   // Get a mask of _running_ threads
+@@ -911,7 +911,7 @@
+                  ER(ER_SLAVE_WAS_NOT_RUNNING));
+   }
+   unlock_slave_threads(mi);
+-  thd->proc_info = 0;
++  THD_PROC_INFO(thd, 0);
+ 
+   if (slave_errno)
+   {
+@@ -1070,7 +1070,7 @@
+     DBUG_RETURN(TRUE);
+   }
+ 
+-  thd->proc_info = "Changing master";
++  THD_PROC_INFO(thd, "Changing master");
+   LEX_MASTER_INFO* lex_mi= &thd->lex->mi;
+   // TODO: see if needs re-write
+   if (init_master_info(mi, master_info_file, relay_log_info_file, 0,
+@@ -1195,7 +1195,7 @@
+   if (need_relay_log_purge)
+   {
+     relay_log_purge= 1;
+-    thd->proc_info="Purging old relay logs";
++    THD_PROC_INFO(thd, "Purging old relay logs");
+     if (purge_relay_logs(&mi->rli, thd,
+ 			 0 /* not only reset, but also reinit */,
+ 			 &errmsg))
+@@ -1258,7 +1258,7 @@
+   pthread_mutex_unlock(&mi->rli.data_lock);
+ 
+   unlock_slave_threads(mi);
+-  thd->proc_info = 0;
++  THD_PROC_INFO(thd, 0);
+   send_ok(thd);
+   DBUG_RETURN(FALSE);
+ }
+===== sql/sql_select.cc 1.397 vs edited =====
+--- 1.397/sql/sql_select.cc	2006-04-25 01:57:27 -07:00
++++ edited/sql/sql_select.cc	2006-04-29 12:21:38 -07:00
+@@ -706,7 +706,7 @@
+   sort_by_table= get_sort_by_table(order, group_list, select_lex->leaf_tables);
+ 
+   /* Calculate how to do the join */
+-  thd->proc_info= "statistics";
++  THD_PROC_INFO(thd, "statistics");
+   if (make_join_statistics(this, select_lex->leaf_tables, conds, &keyuse) ||
+       thd->is_fatal_error)
+   {
+@@ -716,7 +716,7 @@
+ 
+   /* Remove distinct if only const tables */
+   select_distinct= select_distinct && (const_tables != tables);
+-  thd->proc_info= "preparing";
++  THD_PROC_INFO(thd, "preparing");
+   if (result->initialize_tables(this))
+   {
+     DBUG_PRINT("error",("Error: initialize_tables() failed"));
+@@ -1069,7 +1069,7 @@
+   if (need_tmp)
+   {
+     DBUG_PRINT("info",("Creating tmp table"));
+-    thd->proc_info="Creating tmp table";
++    THD_PROC_INFO(thd, "Creating tmp table");
+ 
+     init_items_ref_array();
+ 
+@@ -1106,7 +1106,7 @@
+     if (group_list && simple_group)
+     {
+       DBUG_PRINT("info",("Sorting for group"));
+-      thd->proc_info="Sorting for group";
++      THD_PROC_INFO(thd, "Sorting for group");
+       if (create_sort_index(thd, this, group_list,
+ 			    HA_POS_ERROR, HA_POS_ERROR) ||
+ 	  alloc_group_fields(this, group_list) ||
+@@ -1123,7 +1123,7 @@
+       if (!group_list && ! exec_tmp_table1->distinct && order && simple_order)
+       {
+ 	DBUG_PRINT("info",("Sorting for order"));
+-	thd->proc_info="Sorting for order";
++	THD_PROC_INFO(thd, "Sorting for order");
+ 	if (create_sort_index(thd, this, order,
+                               HA_POS_ERROR, HA_POS_ERROR))
+ 	  DBUG_RETURN(1);
+@@ -1369,7 +1369,7 @@
+     curr_tmp_table= exec_tmp_table1;
+ 
+     /* Copy data to the temporary table */
+-    thd->proc_info= "Copying to tmp table";
++    THD_PROC_INFO(thd, "Copying to tmp table");
+     DBUG_PRINT("info", ("%s", thd->proc_info));
+     if (!curr_join->sort_and_group &&
+         curr_join->const_tables != curr_join->tables)
+@@ -1495,7 +1495,7 @@
+       }
+       if (curr_join->group_list)
+       {
+-	thd->proc_info= "Creating sort index";
++	THD_PROC_INFO(thd, "Creating sort index");
+ 	if (curr_join->join_tab == join_tab && save_join_tab())
+ 	{
+ 	  DBUG_VOID_RETURN;
+@@ -1508,7 +1508,7 @@
+ 	}
+       }
+       
+-      thd->proc_info="Copying to group table";
++      THD_PROC_INFO(thd, "Copying to group table");
+       DBUG_PRINT("info", ("%s", thd->proc_info));
+       tmp_error= -1;
+       if (curr_join != this)
+@@ -1567,7 +1567,7 @@
+     curr_join->join_free();			/* Free quick selects */
+     if (curr_join->select_distinct && ! curr_join->group_list)
+     {
+-      thd->proc_info="Removing duplicates";
++      THD_PROC_INFO(thd, "Removing duplicates");
+       if (curr_join->tmp_having)
+ 	curr_join->tmp_having->update_used_tables();
+       if (remove_duplicates(curr_join, curr_tmp_table,
+@@ -1628,7 +1628,7 @@
+   if (curr_join->group_list || curr_join->order)
+   {
+     DBUG_PRINT("info",("Sorting for send_fields"));
+-    thd->proc_info="Sorting result";
++    THD_PROC_INFO(thd, "Sorting result");
+     /* If we have already done the group, add HAVING to sorted table */
+     if (curr_join->tmp_having && ! curr_join->group_list && 
+ 	! curr_join->sort_and_group)
+@@ -1761,7 +1761,7 @@
+   }
+   else
+   {
+-    thd->proc_info="Sending data";
++    THD_PROC_INFO(thd, "Sending data");
+     DBUG_PRINT("info", ("%s", thd->proc_info));
+     result->send_fields((procedure ? curr_join->procedure_fields_list :
+                          *curr_fields_list),
+@@ -1906,7 +1906,7 @@
+   {
+     if (!(join= new JOIN(thd, fields, select_options, result)))
+ 	DBUG_RETURN(TRUE);
+-    thd->proc_info="init";
++    THD_PROC_INFO(thd, "init");
+     thd->used_tables=0;                         // Updated by setup_fields
+     if (err= join->prepare(rref_pointer_array, tables, wild_num,
+                            conds, og_num, order, group, having, proc_param,
+@@ -1951,7 +1951,7 @@
+ err:
+   if (free_join)
+   {
+-    thd->proc_info="end";
++    THD_PROC_INFO(thd, "end");
+     err|= select_lex->cleanup();
+     DBUG_RETURN(err || thd->net.report_error);
+   }
+@@ -9393,7 +9393,7 @@
+   DBUG_PRINT("enter",("table: %s",entry->alias));
+ 
+   save_proc_info=thd->proc_info;
+-  thd->proc_info="removing tmp table";
++  THD_PROC_INFO(thd, "removing tmp table");
+ 
+   if (entry->file)
+   {
+@@ -9412,7 +9412,7 @@
+   bitmap_lock_clear_bit(&temp_pool, entry->temp_pool_slot);
+ 
+   free_root(&own_root, MYF(0)); /* the table is allocated in its own root */
+-  thd->proc_info=save_proc_info;
++  THD_PROC_INFO(thd, save_proc_info);
+ 
+   DBUG_VOID_RETURN;
+ }
+@@ -9445,7 +9445,7 @@
+     DBUG_RETURN(1);				// End of memory
+ 
+   save_proc_info=thd->proc_info;
+-  thd->proc_info="converting HEAP to MyISAM";
++  THD_PROC_INFO(thd, "converting HEAP to MyISAM");
+ 
+   if (create_myisam_tmp_table(&new_table, param,
+ 			      thd->lex->select_lex.options | thd->options))
+@@ -9504,8 +9504,8 @@
+   *table->s= share;
+   table->file->change_table_ptr(table, table->s);
+   if (save_proc_info)
+-    thd->proc_info= (!strcmp(save_proc_info,"Copying to tmp table") ?
+-                     "Copying to tmp table on disk" : save_proc_info);
++    THD_PROC_INFO(thd, (!strcmp(save_proc_info,"Copying to tmp table") ?
++                        "Copying to tmp table on disk" : save_proc_info));
+   DBUG_RETURN(0);
+ 
+  err:
+@@ -9517,7 +9517,7 @@
+   new_table.file->delete_table(new_table.s->table_name.str);
+  err2:
+   delete new_table.file;
+-  thd->proc_info=save_proc_info;
++  THD_PROC_INFO(thd, save_proc_info);
+   DBUG_RETURN(1);
+ }
+ 
+===== sql/sql_table.cc 1.325 vs edited =====
+--- 1.325/sql/sql_table.cc	2006-04-25 07:32:29 -07:00
++++ edited/sql/sql_table.cc	2006-04-29 11:37:37 -07:00
+@@ -3220,7 +3220,7 @@
+     }
+   }
+ 
+-  thd->proc_info="creating table";
++  THD_PROC_INFO(thd, "creating table");
+   create_info->table_existed= 0;		// Mark that table is created
+ 
+   if (thd->variables.sql_mode & MODE_NO_DIR_IN_CREATE)
+@@ -3261,7 +3261,7 @@
+   start_waiting_global_read_lock(thd);
+ 
+ err:
+-  thd->proc_info="After create";
++  THD_PROC_INFO(thd, "After create");
+   delete file;
+   DBUG_RETURN(error);
+ 
+@@ -4597,7 +4597,7 @@
+     ALTER TABLE
+   */
+ 
+-  thd->proc_info="discard_or_import_tablespace";
++  THD_PROC_INFO(thd, "discard_or_import_tablespace");
+ 
+   discard= test(tablespace_op == DISCARD_TABLESPACE);
+ 
+@@ -4614,7 +4614,7 @@
+ 
+   error=table->file->discard_or_import_tablespace(discard);
+ 
+-  thd->proc_info="end";
++  THD_PROC_INFO(thd, "end");
+ 
+   if (error)
+     goto err;
+@@ -4921,7 +4921,7 @@
+   LINT_INIT(index_add_buffer);
+   LINT_INIT(index_drop_buffer);
+ 
+-  thd->proc_info="init";
++  THD_PROC_INFO(thd, "init");
+   table_name=table_list->table_name;
+   alias= (lower_case_table_names == 2) ? table_list->alias : table_name;
+   db=table_list->db;
+@@ -5023,14 +5023,14 @@
+     DBUG_RETURN(TRUE);
+   }
+   
+-  thd->proc_info="setup";
++  THD_PROC_INFO(thd, "setup");
+   if (!(alter_info->flags & ~(ALTER_RENAME | ALTER_KEYS_ONOFF)) &&
+       !table->s->tmp_table) // no need to touch frm
+   {
+     error=0;
+     if (new_name != table_name || new_db != db)
+     {
+-      thd->proc_info="rename";
++      THD_PROC_INFO(thd, "rename");
+       VOID(pthread_mutex_lock(&LOCK_open));
+       /* Then do a 'simple' rename of the table */
+       error=0;
+@@ -5671,7 +5671,7 @@
+   /* Copy the data if necessary. */
+   thd->count_cuted_fields= CHECK_FIELD_WARN;	// calc cuted fields
+   thd->cuted_fields=0L;
+-  thd->proc_info="copy to tmp table";
++  THD_PROC_INFO(thd, "copy to tmp table");
+   next_insert_id=thd->next_insert_id;		// Remember for logging
+   copied=deleted=0;
+   if (new_table && !(new_table->file->table_flags() & HA_NO_COPY_ON_ALTER))
+@@ -5888,7 +5888,7 @@
+     from the cache, free all locks, close the old table and remove it.
+   */
+ 
+-  thd->proc_info="rename result table";
++  THD_PROC_INFO(thd, "rename result table");
+   my_snprintf(old_name, sizeof(old_name), "%s2-%lx-%lx", tmp_file_prefix,
+ 	      current_pid, thd->thread_id);
+   if (lower_case_table_names)
+@@ -6032,7 +6032,7 @@
+     if (error)
+       goto err;
+   }
+-  thd->proc_info="end";
++  THD_PROC_INFO(thd, "end");
+ 
+   ha_binlog_log_query(thd, create_info->db_type, LOGCOM_ALTER_TABLE,
+                       thd->query, thd->query_length,
+===== sql/sql_update.cc 1.190 vs edited =====
+--- 1.190/sql/sql_update.cc	2006-04-05 09:12:23 -07:00
++++ edited/sql/sql_update.cc	2006-04-29 11:37:37 -07:00
+@@ -166,7 +166,7 @@
+        mysql_handle_derived(thd->lex, &mysql_derived_filling)))
+     DBUG_RETURN(1);
+ 
+-  thd->proc_info="init";
++  THD_PROC_INFO(thd, "init");
+   table= table_list->table;
+ 
+   /* Calculate "table->used_keys" based on the WHERE */
+@@ -387,7 +387,7 @@
+       else
+         init_read_record_idx(&info, thd, table, 1, used_index);
+ 
+-      thd->proc_info="Searching rows for update";
++      THD_PROC_INFO(thd, "Searching rows for update");
+       uint tmp_limit= limit;
+ 
+       while (!(error=info.read_record(&info)) && !thd->killed)
+@@ -457,7 +457,7 @@
+   updated= found= 0;
+   thd->count_cuted_fields= CHECK_FIELD_WARN;		/* calc cuted fields */
+   thd->cuted_fields=0L;
+-  thd->proc_info="Updating";
++  THD_PROC_INFO(thd, "Updating");
+   query_id=thd->query_id;
+ 
+   transactional_table= table->file->has_transactions();
+@@ -634,7 +634,7 @@
+   end_read_record(&info);
+   free_io_cache(table);				// If ORDER BY
+   delete select;
+-  thd->proc_info= "end";
++  THD_PROC_INFO(thd, "end");
+   VOID(table->file->extra(HA_EXTRA_NO_IGNORE_DUP_KEY));
+ 
+   /*
+@@ -1073,7 +1073,7 @@
+ 
+   thd->count_cuted_fields= CHECK_FIELD_WARN;
+   thd->cuted_fields=0L;
+-  thd->proc_info="updating main table";
++  THD_PROC_INFO(thd, "updating main table");
+ 
+   tables_to_update= get_table_map(fields);
+ 
+@@ -1615,11 +1615,11 @@
+ bool multi_update::send_eof()
+ {
+   char buff[STRING_BUFFER_USUAL_SIZE];
+-  thd->proc_info="updating reference tables";
++  THD_PROC_INFO(thd, "updating reference tables");
+ 
+   /* Does updates for the last n - 1 tables, returns 0 if ok */
+   int local_error = (table_count) ? do_updates(0) : 0;
+-  thd->proc_info= "end";
++  THD_PROC_INFO(thd, "end");
+ 
+   /* We must invalidate the query cache before binlog writing and
+   ha_autocommit_... */
+===== sql/sql_view.cc 1.89 vs edited =====
+--- 1.89/sql/sql_view.cc	2006-04-25 07:09:27 -07:00
++++ edited/sql/sql_view.cc	2006-04-29 11:37:37 -07:00
+@@ -502,7 +502,7 @@
+   DBUG_RETURN(0);
+ 
+ err:
+-  thd->proc_info= "end";
++  THD_PROC_INFO(thd, "end");
+   lex->link_first_table_back(view, link_to_local);
+   unit->cleanup();
+   DBUG_RETURN(res || thd->net.report_error);

@@ -1,0 +1,25 @@
+Only in sysbench-0.4.8.orig/doc: manual.html
+diff -aur sysbench-0.4.8.orig/sysbench/sb_logger.c sysbench-0.4.8/sysbench/sb_logger.c
+--- sysbench-0.4.8.orig/sysbench/sb_logger.c	2006-04-03 04:39:09.000000000 -0700
++++ sysbench-0.4.8/sysbench/sb_logger.c	2007-03-01 16:15:29.000000000 -0800
+@@ -614,14 +614,19 @@
+   time_avg = NS2SEC(get_sum_time(&t)) / nthreads;
+   events_stddev = 0;
+   time_stddev = 0;
++  log_text(LOG_NOTICE, "Number of events executed:");
+   for(i = 0; i < nthreads; i++)
+   {
++    log_text(LOG_NOTICE, "  Thread %3i: %10i",
++             i, sb_globals.op_timers[i].events);
+     diff = fabs(events_avg - sb_globals.op_timers[i].events);
+     events_stddev += diff*diff;
+     
+     diff = fabs(time_avg - NS2SEC(get_sum_time(&sb_globals.op_timers[i])));
+     time_stddev += diff*diff;
+   }
++  log_text(LOG_NOTICE, "");
++
+   events_stddev = sqrt(events_stddev / nthreads);
+   time_stddev = sqrt(time_stddev / nthreads);
+   
+Only in sysbench-0.4.8: sysbench-timing.patch

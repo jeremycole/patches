@@ -1,0 +1,154 @@
+diff -x '*.P*' -x 'Makefile*' -x 'buf0buf.*' -Naur innodb_plugin-1.0.0-5.1.orig/handler/ha_innodb.cc innodb_plugin-1.0.0-5.1.jcole/handler/ha_innodb.cc
+--- innodb_plugin-1.0.0-5.1.orig/handler/ha_innodb.cc	2008-04-11 03:58:17.000000000 -0700
++++ innodb_plugin-1.0.0-5.1.jcole/handler/ha_innodb.cc	2008-05-21 13:24:45.000000000 -0700
+@@ -1919,6 +1919,8 @@
+ 	}
+ #endif /* MYSQL_DYNAMIC_PLUGIN */
+ 
++  innobase_restore_buf_pool_state("ib_buf_pool_state");
++
+ 	DBUG_RETURN(FALSE);
+ error:
+ 	DBUG_RETURN(TRUE);
+@@ -1944,6 +1946,8 @@
+ #endif
+ 	if (innodb_inited) {
+ 
++    innobase_save_buf_pool_state("ib_buf_pool_state");
++
+ 		srv_fast_shutdown = (ulint) innobase_fast_shutdown;
+ 		innodb_inited = 0;
+ 		if (innobase_shutdown_for_mysql() != DB_SUCCESS) {
+diff -x '*.P*' -x 'Makefile*' -x 'buf0buf.*' -Naur innodb_plugin-1.0.0-5.1.orig/include/srv0start.h innodb_plugin-1.0.0-5.1.jcole/include/srv0start.h
+--- innodb_plugin-1.0.0-5.1.orig/include/srv0start.h	2008-02-29 13:45:22.000000000 -0800
++++ innodb_plugin-1.0.0-5.1.jcole/include/srv0start.h	2008-05-06 22:03:04.000000000 -0700
+@@ -79,6 +79,19 @@
+ innobase_shutdown_for_mysql(void);
+ /*=============================*/
+ 				/* out: DB_SUCCESS or error code */
++				
++/********************************************************************
++Saves a list of the pages of the buffer pool to disk. */
++UNIV_INTERN
++int
++innobase_save_buf_pool_state(char *filename);
++
++/********************************************************************
++Restores the contents of the buffer pool based on a page list from disk. */
++UNIV_INTERN
++int
++innobase_restore_buf_pool_state(char *filename);
++
+ extern	ib_uint64_t	srv_shutdown_lsn;
+ extern	ib_uint64_t	srv_start_lsn;
+ 
+diff -x '*.P*' -x 'Makefile*' -x 'buf0buf.*' -Naur innodb_plugin-1.0.0-5.1.orig/srv/srv0start.c innodb_plugin-1.0.0-5.1.jcole/srv/srv0start.c
+--- innodb_plugin-1.0.0-5.1.orig/srv/srv0start.c	2008-03-17 07:09:44.000000000 -0700
++++ innodb_plugin-1.0.0-5.1.jcole/srv/srv0start.c	2008-05-07 00:08:22.000000000 -0700
+@@ -1932,6 +1932,106 @@
+ 	return((int) DB_SUCCESS);
+ }
+ 
++/********************************************************************
++Saves a list of the pages of the buffer pool to disk. */
++UNIV_INTERN
++int
++innobase_save_buf_pool_state(char *filename)
++{
++  FILE *state_file;
++
++  buf_chunk_t *chunk;
++  buf_block_t *block;
++  buf_frame_t *frame;
++  ulint n_chunks, n_blocks;
++  dict_index_t *index;
++  
++  if(!(state_file = fopen(filename, "w")))
++    return((int) DB_ERROR);
++
++  buf_pool_mutex_enter();
++  mutex_enter(&(dict_sys->mutex));
++
++  chunk = buf_pool->chunks;
++  for(n_chunks = buf_pool->n_chunks; n_chunks--; chunk++)
++  {
++    block = chunk->blocks;
++    for(n_blocks = chunk->size; n_blocks--; block++)
++    {
++      frame = block->frame;
++      if (fil_page_get_type(frame) == FIL_PAGE_INDEX)
++      {
++        index = dict_index_get_if_in_cache_low(btr_page_get_index_id(frame));
++        if(index)
++        {
++          fprintf(state_file, "%i %i %i %i %i %i\n",
++            block->page.space, block->page.offset,
++            index->table->id.high, index->table->id.low,
++            index->id.high, index->id.low);
++        }
++      }
++    }
++  }
++
++  mutex_exit(&(dict_sys->mutex));
++  buf_pool_mutex_exit();
++  
++  fclose(state_file);
++
++  return((int) DB_SUCCESS);
++}
++
++/********************************************************************
++Restores the contents of the buffer pool based on a page list from disk. */
++UNIV_INTERN
++int
++innobase_restore_buf_pool_state(char *filename)
++{
++  FILE *state_file;
++  ulint space, offset;
++  dulint table_id, index_id;
++  mtr_t mtr;
++  buf_block_t *block;
++  dict_table_t *table;
++
++  if(!(state_file = fopen(filename, "r")))
++    return((int) DB_SUCCESS);
++
++  mtr_start(&mtr);
++
++  while(!feof(state_file))
++  {
++    fscanf(state_file, "%i %i %i %i %i %i\n",
++      &space, &offset,
++      &table_id.high, &table_id.low, 
++      &index_id.high, &index_id.low);
++
++    mutex_enter(&(dict_sys->mutex));
++    table = dict_table_get_on_id_low(table_id);
++    mutex_exit(&(dict_sys->mutex));
++    
++    if(table)
++    {
++      block = buf_page_get(space, 0, offset, RW_NO_LATCH, &mtr);
++      if(block)
++      {
++        printf("succeeded for space=%i offset=%i table_id=%i %i index_id=%i %i\n", space, offset, table_id.high, table_id.low, index_id.high, index_id.low);
++      } else {
++        printf("failed to load block for space=%i offset=%i table_id=%i %i index_id=%i %i\n", space, offset, table_id.high, table_id.low, index_id.high, index_id.low);
++      }
++    } else {
++      printf("failed to load block for space=%i offset=%i table_id=%i %i index_id=%i %i\n", space, offset, table_id.high, table_id.low, index_id.high, index_id.low);
++    }
++  }
++
++  mtr_commit(&mtr);
++
++  fclose(state_file);
++  
++  return((int) DB_SUCCESS);
++}
++
++
+ #ifdef __NETWARE__
+ void set_panic_flag_for_netware()
+ {

@@ -1,0 +1,11 @@
+--- sql/sql_lex.cc.orig	2006-04-25 15:02:32.000000000 -0700
++++ sql/sql_lex.cc	2006-04-25 18:24:04.000000000 -0700
+@@ -179,6 +179,8 @@
+   lex->proc_list.first= 0;
+   lex->query_tables_own_last= 0;
+   lex->escape_used= lex->et_compile_phase= FALSE;
++  lex->profile_options= PROFILE_NONE;
++  lex->profile_query_id  = 0;
+ 
+   lex->name= 0;
+   lex->et= NULL;

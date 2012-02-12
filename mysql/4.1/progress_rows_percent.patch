@@ -1,0 +1,119 @@
+--- mysql-4.1.22/sql/item.h	2006-11-02 18:17:10.000000000 -0800
++++ mysql-4.1.22.progress/sql/item.h	2007-02-08 01:58:10.000000000 -0800
+@@ -856,6 +856,21 @@
+   enum_field_types field_type() const { return int_field_type; }
+ };
+ 
++class Item_return_float :public Item_float
++{
++  enum_field_types float_field_type;
++public:
++  Item_return_float(const char *name, uint decimals, uint length,
++		  enum_field_types field_type_arg)
++    :Item_float(name, length), float_field_type(field_type_arg)
++  {
++    decimals= 2;
++    unsigned_flag=1;
++  }
++  enum_field_types field_type() const { return float_field_type; }
++};
++
++
+ 
+ class Item_varbinary :public Item
+ {
+--- mysql-4.1.22/sql/sql_class.h	2006-11-02 18:17:01.000000000 -0800
++++ mysql-4.1.22.progress/sql/sql_class.h	2007-02-08 01:38:21.000000000 -0800
+@@ -889,6 +889,7 @@
+   ulong      statement_id_counter;
+   ulong	     rand_saved_seed1, rand_saved_seed2;
+   ulong      row_count;  // Row counter, mainly for errors and warnings
++  ulong      row_count_expected;
+   long	     dbug_thread_id;
+   pthread_t  real_id;
+   uint	     current_tablenr,tmp_table,global_read_lock;
+--- mysql-4.1.22/sql/sql_show.cc	2006-11-02 18:15:56.000000000 -0800
++++ mysql-4.1.22.progress/sql/sql_show.cc	2007-02-08 01:41:27.000000000 -0800
+@@ -1582,6 +1582,7 @@
+   uint   command;
+   const char *user,*host,*db,*proc_info,*state_info;
+   char *query;
++  ulonglong row_count, row_count_expected;
+ };
+ 
+ #ifdef __GNUC__
+@@ -1609,6 +1610,14 @@
+   field->maybe_null=1;
+   field_list.push_back(field=new Item_empty_string("Info",max_query_length));
+   field->maybe_null=1;
++
++  if(verbose)
++  {
++    field_list.push_back(field=new Item_return_int("Progress_rows", 11, FIELD_TYPE_LONGLONG));
++    field_list.push_back(field=new Item_return_float("Progress_percent", 2, 6, FIELD_TYPE_FLOAT));
++    field->maybe_null=1;
++  } 
++
+   if (protocol->send_fields(&field_list,1))
+     DBUG_VOID_RETURN;
+ 
+@@ -1669,6 +1678,8 @@
+ #else
+         thd_info->start_time= tmp->start_time;
+ #endif
++        thd_info->row_count= tmp->row_count;
++        thd_info->row_count_expected= tmp->row_count_expected;
+         thd_info->query=0;
+         if (tmp->query)
+         {
+@@ -1688,6 +1699,7 @@
+ 
+   thread_info *thd_info;
+   time_t now= time(0);
++  String buf;
+   while ((thd_info=thread_infos.get()))
+   {
+     protocol->prepare_for_resend();
+@@ -1705,6 +1717,14 @@
+       protocol->store_null();
+     protocol->store(thd_info->state_info, system_charset_info);
+     protocol->store(thd_info->query, system_charset_info);
++    if(verbose)
++    {
++      protocol->store((ulonglong) thd_info->row_count);
++      if(thd_info->row_count_expected)
++        protocol->store((float) 100.0*((float)thd_info->row_count / (float)thd_info->row_count_expected), 2, &buf);
++      else
++        protocol->store_null();
++    }
+     if (protocol->write())
+       break; /* purecov: inspected */
+   }
+--- mysql-4.1.22/sql/sql_parse.cc	2006-11-02 18:17:00.000000000 -0800
++++ mysql-4.1.22.progress/sql/sql_parse.cc	2007-02-08 01:42:34.000000000 -0800
+@@ -1862,6 +1862,7 @@
+   thd->command=COM_SLEEP;
+   thd->query=0;
+   thd->query_length=0;
++  thd->row_count= thd->row_count_expected= 0;
+   thread_running--;
+   VOID(pthread_mutex_unlock(&LOCK_thread_count));
+   thd->packet.shrink(thd->variables.net_buffer_length);	// Reclaim some memory
+@@ -4165,6 +4166,7 @@
+   thd->total_warn_count= 0;                     // Warnings for this query
+   thd->last_insert_id_used= thd->query_start_used= thd->insert_id_used=0;
+   thd->sent_row_count= thd->examined_row_count= 0;
++  thd->row_count= thd->row_count_expected= 0;
+   thd->is_fatal_error= thd->rand_used= thd->time_zone_used= 0;
+   thd->server_status&= ~ (SERVER_MORE_RESULTS_EXISTS | 
+ 			  SERVER_QUERY_NO_INDEX_USED |
+--- mysql-4.1.22/sql/sql_table.cc	2006-11-02 18:16:00.000000000 -0800
++++ mysql-4.1.22.progress/sql/sql_table.cc	2007-02-08 01:43:33.000000000 -0800
+@@ -3685,6 +3685,7 @@
+       handle_duplicates == DUP_REPLACE)
+     to->file->extra(HA_EXTRA_IGNORE_DUP_KEY);
+   thd->row_count= 0;
++  thd->row_count_expected= from->file->records;
+   while (!(error=info.read_record(&info)))
+   {
+     if (thd->killed)

@@ -1,0 +1,13 @@
+--- mysql-5.1.51/scripts/mysqld_safe.sh.orig	2010-09-28 10:35:09.000000000 -0700
++++ mysql-5.1.51/scripts/mysqld_safe.sh	2010-09-28 10:35:46.000000000 -0700
+@@ -556,6 +556,10 @@
+ 
+ cmd="$NOHUP_NICENESS"
+ 
++# Start mysqld with memory allocations interleaved to avoid swapping
++# on NUMA-based architectures.  Should be harmless on non-NUMA.
++cmd="/usr/bin/numactl --interleave all $cmd"
++
+ for i in  "$ledir/$MYSQLD" "$defaults" "--basedir=$MY_BASEDIR_VERSION" \
+   "--datadir=$DATADIR" "$USER_OPTION"
+ do

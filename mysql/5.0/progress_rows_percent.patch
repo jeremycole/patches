@@ -1,0 +1,120 @@
+--- mysql-5.0.33/sql/item.h	2007-01-09 04:51:49.000000000 -0800
++++ mysql-5.0.33.jcole/sql/item.h	2007-02-07 21:24:46.000000000 -0800
+@@ -1764,6 +1764,20 @@
+ };
+ 
+ 
++class Item_return_float :public Item_float
++{
++  enum_field_types float_field_type;
++public:
++  Item_return_float(const char *name, uint decimals, uint length,
++		  enum_field_types field_type_arg)
++    :Item_float(name, 0, decimals, length), float_field_type(field_type_arg)
++  {
++    unsigned_flag=1;
++  }
++  enum_field_types field_type() const { return float_field_type; }
++};
++
++
+ class Item_hex_string: public Item
+ {
+ public:
+--- mysql-5.0.33/sql/sql_class.h	2007-01-09 04:51:49.000000000 -0800
++++ mysql-5.0.33.jcole/sql/sql_class.h	2007-02-07 21:16:10.000000000 -0800
+@@ -1324,6 +1324,7 @@
+   ulong      statement_id_counter;
+   ulong	     rand_saved_seed1, rand_saved_seed2;
+   ulong      row_count;  // Row counter, mainly for errors and warnings
++  ulong      row_count_expected;
+   long	     dbug_thread_id;
+   pthread_t  real_id;
+   uint	     tmp_table, global_read_lock;
+--- mysql-5.0.33/sql/sql_show.cc	2007-01-09 04:51:20.000000000 -0800
++++ mysql-5.0.33.jcole/sql/sql_show.cc	2007-02-07 22:18:58.000000000 -0800
+@@ -1265,6 +1265,7 @@
+   uint   command;
+   const char *user,*host,*db,*proc_info,*state_info;
+   char *query;
++  ulonglong row_count, row_count_expected;
+ };
+ 
+ #ifdef HAVE_EXPLICIT_TEMPLATE_INSTANTIATION
+@@ -1292,6 +1293,14 @@
+   field->maybe_null=1;
+   field_list.push_back(field=new Item_empty_string("Info",max_query_length));
+   field->maybe_null=1;
++
++  if(verbose)
++  {
++    field_list.push_back(field=new Item_return_int("Progress_rows", 11, FIELD_TYPE_LONGLONG));
++    field_list.push_back(field=new Item_return_float("Progress_percent", 2, 6, FIELD_TYPE_FLOAT));
++    field->maybe_null=1;
++  } 
++  
+   if (protocol->send_fields(&field_list,
+                             Protocol::SEND_NUM_ROWS | Protocol::SEND_EOF))
+     DBUG_VOID_RETURN;
+@@ -1357,6 +1366,8 @@
+ #else
+         thd_info->start_time= tmp->start_time;
+ #endif
++        thd_info->row_count= tmp->row_count;
++        thd_info->row_count_expected= tmp->row_count_expected;
+         thd_info->query=0;
+         if (tmp->query)
+         {
+@@ -1376,6 +1387,7 @@
+ 
+   thread_info *thd_info;
+   time_t now= time(0);
++  String buf;
+   while ((thd_info=thread_infos.get()))
+   {
+     protocol->prepare_for_resend();
+@@ -1393,6 +1405,14 @@
+       protocol->store_null();
+     protocol->store(thd_info->state_info, system_charset_info);
+     protocol->store(thd_info->query, system_charset_info);
++    if(verbose)
++    {
++      protocol->store((ulonglong) thd_info->row_count);
++      if(thd_info->row_count_expected)
++        protocol->store((float) 100.0*((float)thd_info->row_count / (float)thd_info->row_count_expected), 2, &buf);
++      else
++        protocol->store_null();
++    }
+     if (protocol->write())
+       break; /* purecov: inspected */
+   }
+--- mysql-5.0.33/sql/sql_parse.cc	2007-01-09 04:51:48.000000000 -0800
++++ mysql-5.0.33.jcole/sql/sql_parse.cc	2007-02-07 21:16:47.000000000 -0800
+@@ -2135,6 +2135,7 @@
+   thd->command=COM_SLEEP;
+   thd->query=0;
+   thd->query_length=0;
++  thd->row_count= thd->row_count_expected= 0;
+   thread_running--;
+   VOID(pthread_mutex_unlock(&LOCK_thread_count));
+   thd->packet.shrink(thd->variables.net_buffer_length);	// Reclaim some memory
+@@ -5632,6 +5633,7 @@
+     thd->total_warn_count=0;			// Warnings for this query
+     thd->rand_used= 0;
+     thd->sent_row_count= thd->examined_row_count= 0;
++    thd->row_count= thd->row_count_expected= 0;
+   }
+   DBUG_VOID_RETURN;
+ }
+--- mysql-5.0.33/sql/sql_table.cc	2007-01-09 04:51:27.000000000 -0800
++++ mysql-5.0.33.jcole/sql/sql_table.cc	2007-02-07 22:05:09.000000000 -0800
+@@ -3984,6 +3984,9 @@
+     to->file->extra(HA_EXTRA_IGNORE_DUP_KEY);
+   thd->row_count= 0;
+   restore_record(to, s->default_values);        // Create empty record
++  
++  thd->row_count_expected= from->file->records;
++  
+   while (!(error=info.read_record(&info)))
+   {
+     if (thd->killed)

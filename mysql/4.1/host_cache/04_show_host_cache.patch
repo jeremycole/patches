@@ -1,0 +1,197 @@
+===== sql/hostname.cc 1.32 vs edited =====
+--- 1.32/sql/hostname.cc	2005-10-23 21:32:08 -07:00
++++ edited/sql/hostname.cc	2005-10-23 21:32:48 -07:00
+@@ -39,15 +39,7 @@
+ #endif
+ 
+ 
+-class host_entry :public hash_filo_element
+-{
+-public:
+-  uint32 ip;
+-  uint	 errors;
+-  char	 *hostname;
+-};
+-
+-static hash_filo *hostname_cache;
++hash_filo *hostname_cache;
+ 
+ /*
+   A simple inline function to return the hash key for a given entry.
+===== sql/lex.h 1.147 vs edited =====
+--- 1.147/sql/lex.h	2004-11-10 08:56:34 -08:00
++++ edited/sql/lex.h	2005-10-23 21:32:48 -07:00
+@@ -202,6 +202,7 @@
+   { "HAVING",		SYM(HAVING)},
+   { "HELP",		SYM(HELP_SYM)},
+   { "HIGH_PRIORITY",	SYM(HIGH_PRIORITY)},
++  { "HOST",             SYM(HOST_SYM)},
+   { "HOSTS",		SYM(HOSTS_SYM)},
+   { "HOUR",		SYM(HOUR_SYM)},
+   { "HOUR_MICROSECOND",	SYM(HOUR_MICROSECOND_SYM)},
+===== sql/mysql_priv.h 1.370 vs edited =====
+--- 1.370/sql/mysql_priv.h	2005-10-23 21:32:08 -07:00
++++ edited/sql/mysql_priv.h	2005-10-23 21:32:48 -07:00
+@@ -25,6 +25,7 @@
+ #include <thr_lock.h>
+ #include <my_base.h>			/* Needed by field.h */
+ #include "sql_bitmap.h"
++#include "hash_filo.h"
+ 
+ #ifdef __EMX__
+ #undef write  /* remove pthread.h macro definition for EMX */
+@@ -648,6 +649,7 @@
+ int mysql_do(THD *thd, List<Item> &values);
+ 
+ /* sql_show.cc */
++int mysqld_show_host_cache(THD *thd);
+ int mysqld_show_dbs(THD *thd,const char *wild);
+ int mysqld_show_open_tables(THD *thd,const char *wild);
+ int mysqld_show_tables(THD *thd,const char *db,const char *wild);
+@@ -1138,6 +1140,14 @@
+ int wild_case_compare(CHARSET_INFO *cs, const char *str,const char *wildstr);
+ 
+ /* from hostname.cc */
++class host_entry :public hash_filo_element
++{
++public:
++  uint32 ip;
++  uint	 errors;
++  char	 *hostname;
++};
++extern hash_filo *hostname_cache;
+ struct in_addr;
+ my_string ip_to_hostname(struct in_addr *in,uint *errors);
+ void hostname_cache_inc_errors(struct in_addr *in);
+===== sql/mysqld.cc 1.605 vs edited =====
+--- 1.605/sql/mysqld.cc	2005-10-23 21:32:08 -07:00
++++ edited/sql/mysqld.cc	2005-10-23 21:32:48 -07:00
+@@ -5587,6 +5587,7 @@
+   {"Com_show_status",	       (char*) (com_stat+(uint) SQLCOM_SHOW_STATUS),SHOW_LONG},
+   {"Com_show_storage_engines", (char*) (com_stat+(uint) SQLCOM_SHOW_STORAGE_ENGINES),SHOW_LONG},
+   {"Com_show_tables",	       (char*) (com_stat+(uint) SQLCOM_SHOW_TABLES),SHOW_LONG},
++  {"Com_show_host_cache",      (char*) (com_stat+(uint) SQLCOM_SHOW_HOST_CACHE),SHOW_LONG},
+   {"Com_show_variables",       (char*) (com_stat+(uint) SQLCOM_SHOW_VARIABLES),SHOW_LONG},
+   {"Com_show_warnings",        (char*) (com_stat+(uint) SQLCOM_SHOW_WARNS),SHOW_LONG},
+   {"Com_slave_start",	       (char*) (com_stat+(uint) SQLCOM_SLAVE_START),SHOW_LONG},
+===== sql/sql_lex.h 1.187 vs edited =====
+--- 1.187/sql/sql_lex.h	2005-10-11 16:32:13 -07:00
++++ edited/sql/sql_lex.h	2005-10-23 21:32:48 -07:00
+@@ -77,6 +77,7 @@
+   SQLCOM_HELP, SQLCOM_DROP_USER, SQLCOM_REVOKE_ALL, SQLCOM_CHECKSUM,
+ 
+   SQLCOM_PREPARE, SQLCOM_EXECUTE, SQLCOM_DEALLOCATE_PREPARE,
++  SQLCOM_SHOW_HOST_CACHE,
+   /* This should be the last !!! */
+   SQLCOM_END
+ };
+===== sql/sql_parse.cc 1.472 vs edited =====
+--- 1.472/sql/sql_parse.cc	2005-10-23 21:22:23 -07:00
++++ edited/sql/sql_parse.cc	2005-10-23 21:32:48 -07:00
+@@ -3169,6 +3169,9 @@
+       break;
+     }
+ #endif
++  case SQLCOM_SHOW_HOST_CACHE:
++    res= mysqld_show_host_cache(thd);
++    break;
+   case SQLCOM_SHOW_OPEN_TABLES:
+     res= mysqld_show_open_tables(thd,(lex->wild ? lex->wild->ptr() : NullS));
+     break;
+===== sql/sql_prepare.cc 1.155 vs edited =====
+--- 1.155/sql/sql_prepare.cc	2005-09-25 11:22:21 -07:00
++++ edited/sql/sql_prepare.cc	2005-10-23 21:32:48 -07:00
+@@ -1461,6 +1461,7 @@
+   case SQLCOM_SHOW_VARIABLES:
+   case SQLCOM_SHOW_LOGS:
+   case SQLCOM_SHOW_TABLES:
++  case SQLCOM_SHOW_HOST_CACHE:
+   case SQLCOM_SHOW_OPEN_TABLES:
+   case SQLCOM_SHOW_CHARSETS:
+   case SQLCOM_SHOW_COLLATIONS:
+===== sql/sql_show.cc 1.205 vs edited =====
+--- 1.205/sql/sql_show.cc	2005-10-03 11:48:48 -07:00
++++ edited/sql/sql_show.cc	2005-10-23 21:32:48 -07:00
+@@ -39,6 +39,51 @@
+ static int
+ store_create_info(THD *thd, TABLE *table, String *packet);
+ 
++int mysqld_show_host_cache(THD *thd)
++{
++  List<Item> field_list;
++  Protocol *protocol= thd->protocol;
++  Item *item;
++
++  char ip[16];
++  host_entry *cur;
++
++  DBUG_ENTER("mysqld_show_host_cache");
++
++  field_list.push_back(new Item_empty_string("IP", 15));
++  field_list.push_back(item= new Item_empty_string("Hostname", 255));
++  item->maybe_null= 1;
++  field_list.push_back(new Item_return_int("Errors", 10, 
++                                           MYSQL_TYPE_LONG));
++
++  if (protocol->send_fields(&field_list, 1))
++    DBUG_RETURN(1);
++
++  (void) pthread_mutex_lock(&hostname_cache->lock);
++
++  for(cur= (host_entry *) hostname_cache->newest_element();
++      cur; cur= (host_entry *) cur->older_element())
++  {
++    sprintf(ip, "%u.%u.%u.%u",
++            (unsigned char)(cur->ip>>24), (unsigned char)(cur->ip>>16), 
++            (unsigned char)(cur->ip>> 8), (unsigned char)(cur->ip));
++    protocol->prepare_for_resend();
++    protocol->store(ip, system_charset_info);
++    if(cur->hostname)
++      protocol->store(cur->hostname, system_charset_info);
++    else
++      protocol->store_null();
++    protocol->store((uint)cur->errors);
++    if(protocol->write())
++      DBUG_RETURN(-1);
++  }
++
++  (void) pthread_mutex_unlock(&hostname_cache->lock);
++
++  send_eof(thd);
++  DBUG_RETURN(0);
++}
++
+ 
+ /*
+   Report list of databases
+===== sql/sql_yacc.yy 1.395 vs edited =====
+--- 1.395/sql/sql_yacc.yy	2005-10-12 00:44:20 -07:00
++++ edited/sql/sql_yacc.yy	2005-10-23 21:32:48 -07:00
+@@ -251,6 +251,7 @@
+ %token	HASH_SYM
+ %token	HEX_NUM
+ %token	HIGH_PRIORITY
++%token  HOST_SYM
+ %token	HOSTS_SYM
+ %token	IDENT
+ %token	IDENT_QUOTED
+@@ -4395,6 +4396,11 @@
+ 	    lex->describe= DESCRIBE_EXTENDED;
+ 	    lex->select_lex.db= $3;
+ 	  }
++  | HOST_SYM CACHE_SYM 
++    {
++      LEX *lex= Lex;
++      lex->sql_command= SQLCOM_SHOW_HOST_CACHE;
++    }
+ 	| OPEN_SYM TABLES opt_db wild
+ 	  {
+ 	    LEX *lex= Lex;
+@@ -5265,6 +5271,7 @@
+ 	| HANDLER_SYM		{}
+ 	| HASH_SYM		{}
+ 	| HELP_SYM		{}
++	| HOST_SYM    {}
+ 	| HOSTS_SYM		{}
+ 	| HOUR_SYM		{}
+ 	| IDENTIFIED_SYM	{}

@@ -1,0 +1,167 @@
+===== mysys/default.c 1.47 vs edited =====
+--- 1.47/mysys/default.c	2005-02-25 16:28:37 +03:00
++++ edited/mysys/default.c	2005-03-05 03:09:00 +03:00
+@@ -73,7 +73,7 @@
+ static int search_default_file_with_ext(DYNAMIC_ARRAY *args, MEM_ROOT *alloc,
+ 					const char *dir, const char *ext,
+ 					const char *config_file,
+-					TYPELIB *group);
++					TYPELIB *group, int recursion_level);
+ 
+ static char *remove_end_comment(char *ptr);
+ 
+@@ -193,8 +193,8 @@
+   if (forced_default_file)
+   {
+     if ((error= search_default_file_with_ext(&args, &alloc, "", "",
+-					     forced_default_file, 
+-					     &group)) < 0)
++					     forced_default_file,
++					     &group, 0)) < 0)
+       goto err;
+     if (error > 0)
+     {
+@@ -311,7 +311,7 @@
+   {
+     int error;
+     if ((error= search_default_file_with_ext(args, alloc, dir, *ext,
+-					     config_file, group)) < 0)
++					     config_file, group, 0)) < 0)
+       return error;
+   }
+   return 0;
+@@ -320,7 +320,7 @@
+ 
+ /*
+   Open a configuration file (if exists) and read given options from it
+-  
++
+   SYNOPSIS
+     search_default_file_with_ext()
+     args			Store pointer to found options here
+@@ -329,6 +329,8 @@
+     config_file			Name of configuration file
+     ext				Extension for configuration file
+     group			groups to read
++    recursion_level             the level of recursion, got while processing
++                                "!include" or "!includedir"
+ 
+   RETURN
+     0   Success
+@@ -340,12 +342,19 @@
+ static int search_default_file_with_ext(DYNAMIC_ARRAY *args, MEM_ROOT *alloc,
+ 					const char *dir, const char *ext,
+ 					const char *config_file,
+-					TYPELIB *group)
++					TYPELIB *group, int recursion_level)
+ {
+   char name[FN_REFLEN+10],buff[4096],*ptr,*end,*value,*tmp;
++  char includedir_keyword[]= "includedir";
++  char include_keyword[]= "include";
++  const int max_recursion_level= 10;
+   FILE *fp;
+   uint line=0;
+-  my_bool read_values=0,found_group=0;
++  my_bool read_values=0, found_group=0;
++
++  uint i;
++  MY_DIR *search_dir;
++  FILEINFO *search_file;
+ 
+   if ((dir ? strlen(dir) : 0 )+strlen(config_file) >= FN_REFLEN-3)
+     return 0;					/* Ignore wrong paths */
+@@ -380,16 +389,91 @@
+     }
+   }
+ #endif
+-  if (!(fp = my_fopen(fn_format(name,name,"","",4),O_RDONLY,MYF(0))))
++  if (!(fp = my_fopen(fn_format(name, name, "", "", 4), O_RDONLY, MYF(0))))
+     return 0;					/* Ignore wrong files */
+ 
+-  while (fgets(buff,sizeof(buff)-1,fp))
++  while (fgets(buff, sizeof(buff) - 1, fp))
+   {
+     line++;
+     /* Ignore comment and empty lines */
+-    for (ptr=buff ; my_isspace(&my_charset_latin1,*ptr) ; ptr++ ) ;
++    for (ptr=buff ; my_isspace(&my_charset_latin1,*ptr) ; ptr++ )
++      ;
++
+     if (*ptr == '#' || *ptr == ';' || !*ptr)
+       continue;
++
++    /* Configuration File Directives */
++    if ((*ptr == '!') && (recursion_level < max_recursion_level))
++    {
++      /* skip over `!' and following whitespace */
++      for(++ptr; my_isspace(&my_charset_latin1, ptr[0]); ptr++)
++        ;
++
++      /*
++        In this branch we process the Directory Search Directive.
++        It is important that this brach goes first as
++        strncmp(ptr, include_keyword, sizeof(...)) returns 0 for every ptr
++        string starting with "include". So we need to check for "includedir"
++        first, and if ptr does not match, check ptr for "include".
++      */
++      if (!strncmp(ptr, includedir_keyword, sizeof(includedir_keyword) - 1))
++      {
++        /* skip over "includedir" and following whitespace */
++        for(ptr+= sizeof(includedir_keyword) - 1;
++            my_isspace(&my_charset_latin1, ptr[0]); ptr++)
++          ;
++
++        /* trim trailing whitespace from directory name */
++        end = ptr + strlen(ptr) - 1;
++        for ( ; my_isspace(&my_charset_latin1, end[-1]) ; end--)
++          ;
++
++        end[0]=0;
++
++        if (!(search_dir = my_dir(ptr, MYF(MY_WME))))
++          goto err;
++
++        for (i=0 ; i < (uint) search_dir->number_off_files ; i++)
++        {
++          search_file=search_dir->dir_entry+i;
++          if (!strcmp(ext=fn_ext(search_file->name), ".cnf"))
++          {
++            if (!(tmp=alloc_root(alloc, 2 + strlen(search_file->name)
++                                          + strlen(ptr))))
++              goto err;
++            strmov(tmp, ptr);
++            end = tmp + strlen(tmp) - 1;
++            if (end[0] != '/') *end++= '/';
++            strncat(end, search_file->name, strlen(search_file->name));
++
++            search_default_file_with_ext(args, alloc, "", "", tmp, group,
++                                         recursion_level + 1);
++          }
++        }
++
++        my_dirend(search_dir);
++      }
++
++      /* Include Directive */
++      else if (!strncmp(ptr, include_keyword, sizeof(include_keyword) - 1))
++      {
++        /* skip over `include' and following whitespace */
++        for(ptr+= sizeof(include_keyword) - 1;
++            my_isspace(&my_charset_latin1, ptr[0]); ptr++) ;
++
++        /* trim trailing whitespace from filename */
++        end = ptr + strlen(ptr) - 1;
++        for ( ; my_isspace(&my_charset_latin1, end[-1]) ; end--)
++          ;
++        end[0]= 0;
++
++        search_default_file_with_ext(args, alloc, "", "", ptr, group,
++                                     recursion_level + 1);
++      }
++
++      continue;
++    }
++
+     if (*ptr == '[')				/* Group name */
+     {
+       found_group=1;

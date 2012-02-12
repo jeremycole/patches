@@ -1,0 +1,2095 @@
+# This is a BitKeeper generated diff -Nru style patch.
+#
+# ChangeSet
+#   2005/11/14 03:06:24-08:00 jcole@jojo.local 
+#   SHOW PROFILE
+# 
+# sql/sql_yacc.yy
+#   2005/11/14 03:06:11-08:00 jcole@jojo.local +59 -0
+#   SHOW PROFILE
+# 
+# sql/sql_update.cc
+#   2005/11/14 03:06:11-08:00 jcole@jojo.local +7 -7
+#   SHOW PROFILE
+# 
+# sql/sql_table.cc
+#   2005/11/14 03:06:11-08:00 jcole@jojo.local +11 -11
+#   SHOW PROFILE
+# 
+# sql/sql_select.cc
+#   2005/11/14 03:06:11-08:00 jcole@jojo.local +44 -31
+#   SHOW PROFILE
+# 
+# sql/sql_parse.cc
+#   2005/11/14 03:06:10-08:00 jcole@jojo.local +23 -7
+#   SHOW PROFILE
+# 
+# sql/sql_lex.h
+#   2005/11/14 03:06:10-08:00 jcole@jojo.local +2 -0
+#   SHOW PROFILE
+# 
+# sql/sql_lex.cc
+#   2005/11/14 03:06:10-08:00 jcole@jojo.local +1 -0
+#   SHOW PROFILE
+# 
+# sql/sql_insert.cc
+#   2005/11/14 03:06:10-08:00 jcole@jojo.local +16 -16
+#   SHOW PROFILE
+# 
+# sql/sql_delete.cc
+#   2005/11/14 03:06:10-08:00 jcole@jojo.local +6 -6
+#   SHOW PROFILE
+# 
+# sql/sql_class.h
+#   2005/11/14 03:06:10-08:00 jcole@jojo.local +3 -0
+#   SHOW PROFILE
+# 
+# sql/sql_class.cc
+#   2005/11/14 03:06:10-08:00 jcole@jojo.local +2 -0
+#   SHOW PROFILE
+# 
+# sql/sql_cache.cc
+#   2005/11/14 03:06:10-08:00 jcole@jojo.local +9 -1
+#   SHOW PROFILE
+# 
+# sql/sql_base.cc
+#   2005/11/14 03:06:09-08:00 jcole@jojo.local +12 -12
+#   SHOW PROFILE
+# 
+# sql/mysql_priv.h
+#   2005/11/14 03:06:09-08:00 jcole@jojo.local +4 -0
+#   SHOW PROFILE
+# 
+# sql/lock.cc
+#   2005/11/14 03:06:09-08:00 jcole@jojo.local +4 -4
+#   SHOW PROFILE
+# 
+# sql/lex.h
+#   2005/11/14 03:06:09-08:00 jcole@jojo.local +13 -0
+#   SHOW PROFILE
+# 
+# sql/ha_myisam.cc
+#   2005/11/14 03:06:09-08:00 jcole@jojo.local +12 -12
+#   SHOW PROFILE
+# 
+# sql/Makefile.am
+#   2005/11/14 03:06:08-08:00 jcole@jojo.local +2 -0
+#   SHOW PROFILE
+# 
+# sql/sql_profile.cc
+#   2005/11/14 03:03:51-08:00 jcole@jojo.local +424 -0
+# 
+# sql/sql_profile.cc
+#   2005/11/14 03:03:51-08:00 jcole@jojo.local +0 -0
+#   BitKeeper file /Users/jcole/bk/mysql-tt/sql/sql_profile.cc
+# 
+# sql/sql_profile.h
+#   2005/11/14 03:03:49-08:00 jcole@jojo.local +145 -0
+# 
+# sql/sql_profile.h
+#   2005/11/14 03:03:49-08:00 jcole@jojo.local +0 -0
+#   BitKeeper file /Users/jcole/bk/mysql-tt/sql/sql_profile.h
+# 
+diff -Nru a/sql/Makefile.am b/sql/Makefile.am
+--- a/sql/Makefile.am	2005-11-14 03:09:21 -08:00
++++ b/sql/Makefile.am	2005-11-14 03:09:21 -08:00
+@@ -49,6 +49,7 @@
+ 			procedure.h sql_class.h sql_lex.h sql_list.h \
+ 			sql_manager.h sql_map.h sql_string.h unireg.h \
+ 			sql_error.h field.h handler.h mysqld_suffix.h \
++			sql_profile.h \
+ 			ha_heap.h ha_myisam.h ha_myisammrg.h \
+ 			opt_range.h protocol.h \
+ 			sql_select.h structs.h table.h sql_udf.h hash_filo.h\
+@@ -73,6 +74,7 @@
+ 			set_var.cc sql_parse.cc sql_yacc.yy \
+ 			sql_base.cc table.cc sql_select.cc sql_insert.cc \
+                         sql_prepare.cc sql_error.cc \
++      sql_profile.cc \
+ 			sql_update.cc sql_delete.cc uniques.cc sql_do.cc \
+ 			procedure.cc item_uniq.cc sql_test.cc \
+ 			log.cc log_event.cc init.cc derror.cc sql_acl.cc \
+diff -Nru a/sql/ha_myisam.cc b/sql/ha_myisam.cc
+--- a/sql/ha_myisam.cc	2005-11-14 03:09:22 -08:00
++++ b/sql/ha_myisam.cc	2005-11-14 03:09:22 -08:00
+@@ -354,7 +354,7 @@
+   MYISAM_SHARE* share = file->s;
+   const char *old_proc_info=thd->proc_info;
+ 
+-  thd->proc_info="Checking table";
++  THD_PROC_INFO(thd, "Checking table");
+   myisamchk_init(&param);
+   param.thd = thd;
+   param.op_name =   "check";
+@@ -426,7 +426,7 @@
+     file->update |= HA_STATE_CHANGED | HA_STATE_ROW_CHANGED;
+   }
+ 
+-  thd->proc_info=old_proc_info;
++  THD_PROC_INFO(thd, old_proc_info);
+   return error ? HA_ADMIN_CORRUPT : HA_ADMIN_OK;
+ }
+ 
+@@ -692,22 +692,22 @@
+         char buf[40];
+         /* TODO: respect myisam_repair_threads variable */
+         my_snprintf(buf, 40, "Repair with %d threads", my_count_bits(key_map));
+-        thd->proc_info=buf;
++        THD_PROC_INFO(thd, buf);
+         error = mi_repair_parallel(&param, file, fixed_name,
+             param.testflag & T_QUICK);
+-        thd->proc_info="Repair done"; // to reset proc_info, as
++        THD_PROC_INFO(thd, "Repair done"); // to reset proc_info, as
+                                       // it was pointing to local buffer
+       }
+       else
+       {
+-        thd->proc_info="Repair by sorting";
++        THD_PROC_INFO(thd, "Repair by sorting");
+         error = mi_repair_by_sort(&param, file, fixed_name,
+             param.testflag & T_QUICK);
+       }
+     }
+     else
+     {
+-      thd->proc_info="Repair with keycache";
++      THD_PROC_INFO(thd, "Repair with keycache");
+       param.testflag &= ~T_REP_BY_SORT;
+       error=  mi_repair(&param, file, fixed_name,
+ 			param.testflag & T_QUICK);
+@@ -721,7 +721,7 @@
+ 	(share->state.changed & STATE_NOT_SORTED_PAGES))
+     {
+       optimize_done=1;
+-      thd->proc_info="Sorting index";
++      THD_PROC_INFO(thd, "Sorting index");
+       error=mi_sort_index(&param,file,fixed_name);
+     }
+     if (!statistics_done && (local_testflag & T_STATISTICS))
+@@ -729,14 +729,14 @@
+       if (share->state.changed & STATE_NOT_ANALYZED)
+       {
+ 	optimize_done=1;
+-	thd->proc_info="Analyzing";
++	THD_PROC_INFO(thd, "Analyzing");
+ 	error = chk_key(&param, file);
+       }
+       else
+ 	local_testflag&= ~T_STATISTICS;		// Don't update statistics
+     }
+   }
+-  thd->proc_info="Saving state";
++  THD_PROC_INFO(thd, "Saving state");
+   if (!error)
+   {
+     if ((share->state.changed & STATE_CHANGED) || mi_is_crashed(file))
+@@ -774,7 +774,7 @@
+     file->update |= HA_STATE_CHANGED | HA_STATE_ROW_CHANGED;
+     update_state_info(&param, file, 0);
+   }
+-  thd->proc_info=old_proc_info;
++  THD_PROC_INFO(thd, old_proc_info);
+   if (!thd->locked_tables)
+     mi_lock_database(file,F_UNLCK);
+   DBUG_RETURN(error ? HA_ADMIN_FAILED :
+@@ -999,7 +999,7 @@
+     THD *thd=current_thd;
+     MI_CHECK param;
+     const char *save_proc_info=thd->proc_info;
+-    thd->proc_info="Creating index";
++    THD_PROC_INFO(thd, "Creating index");
+     myisamchk_init(&param);
+     param.op_name= "recreating_index";
+     param.testflag= (T_SILENT | T_REP_BY_SORT | T_QUICK |
+@@ -1019,7 +1019,7 @@
+         error= HA_ERR_CRASHED;
+     }
+     info(HA_STATUS_CONST);
+-    thd->proc_info=save_proc_info;
++    THD_PROC_INFO(thd, save_proc_info);
+   }
+   else
+   {
+diff -Nru a/sql/lex.h b/sql/lex.h
+--- a/sql/lex.h	2005-11-14 03:09:22 -08:00
++++ b/sql/lex.h	2005-11-14 03:09:22 -08:00
+@@ -88,6 +88,7 @@
+   { "BINLOG",		SYM(BINLOG_SYM)},
+   { "BIT",		SYM(BIT_SYM)},
+   { "BLOB",		SYM(BLOB_SYM)},
++  { "BLOCK",  SYM(BLOCK_SYM)},
+   { "BOOL",		SYM(BOOL_SYM)},
+   { "BOOLEAN",		SYM(BOOLEAN_SYM)},
+   { "BOTH",		SYM(BOTH)},
+@@ -126,8 +127,10 @@
+   { "CONSISTENT",	SYM(CONSISTENT_SYM)},
+   { "CONSTRAINT",	SYM(CONSTRAINT)},
+   { "CONTAINS",         SYM(CONTAINS_SYM)},
++  { "CONTEXT",    SYM(CONTEXT_SYM)},
+   { "CONTINUE",         SYM(CONTINUE_SYM)},
+   { "CONVERT",		SYM(CONVERT_SYM)},
++  { "CPU",        SYM(CPU_SYM)},
+   { "CREATE",		SYM(CREATE)},
+   { "CROSS",		SYM(CROSS)},
+   { "CUBE",		SYM(CUBE_SYM)},
+@@ -193,6 +196,7 @@
+   { "EXTENDED",		SYM(EXTENDED_SYM)},
+   { "FALSE",		SYM(FALSE_SYM)},
+   { "FAST",		SYM(FAST_SYM)},
++  { "FAULTS",  SYM(FAULTS_SYM)},
+   { "FETCH",            SYM(FETCH_SYM)},
+   { "FIELDS",		SYM(COLUMNS)},
+   { "FILE",		SYM(FILE_SYM)},
+@@ -256,7 +260,9 @@
+   { "INTEGER",		SYM(INT_SYM)},
+   { "INTERVAL",		SYM(INTERVAL_SYM)},
+   { "INTO",		SYM(INTO)},
++  { "IO",     SYM(IO_SYM)},
+   { "IO_THREAD",        SYM(RELAY_THREAD)},
++  { "IPC",    SYM(IPC_SYM)},
+   { "IS",		SYM(IS)},
+   { "ISOLATION",	SYM(ISOLATION)},
+   { "ISSUER",		SYM(ISSUER_SYM)},
+@@ -322,6 +328,7 @@
+   { "MEDIUMBLOB",	SYM(MEDIUMBLOB)},
+   { "MEDIUMINT",	SYM(MEDIUMINT)},
+   { "MEDIUMTEXT",	SYM(MEDIUMTEXT)},
++  { "MEMORY",     SYM(MEMORY_SYM)},
+   { "MERGE",		SYM(MERGE_SYM)},
+   { "MICROSECOND",	SYM(MICROSECOND_SYM)},
+   { "MIDDLEINT",	SYM(MEDIUMINT)},	/* For powerbuilder */
+@@ -371,6 +378,7 @@
+   { "OUTER",		SYM(OUTER)},
+   { "OUTFILE",		SYM(OUTFILE)},
+   { "PACK_KEYS",	SYM(PACK_KEYS_SYM)},
++  { "PAGE",       SYM(PAGE_SYM)},
+   { "PARSER",           SYM(PARSER_SYM)},
+   { "PARTIAL",		SYM(PARTIAL)},
+   { "PARTITION",        SYM(PARTITION_SYM)},
+@@ -388,6 +396,8 @@
+   { "PROCEDURE",	SYM(PROCEDURE)},
+   { "PROCESS"	,	SYM(PROCESS)},
+   { "PROCESSLIST",	SYM(PROCESSLIST_SYM)},
++  { "PROFILE",    SYM(PROFILE_SYM)},
++  { "PROFILES",   SYM(PROFILES_SYM)},
+   { "PURGE",		SYM(PURGE)},
+   { "QUARTER",          SYM(QUARTER_SYM)},
+   { "QUERY",		SYM(QUERY_SYM)},
+@@ -457,6 +467,7 @@
+   { "SOME",             SYM(ANY_SYM)},
+   { "SONAME",		SYM(SONAME_SYM)},
+   { "SOUNDS",		SYM(SOUNDS_SYM)},
++  { "SOURCE",   SYM(SOURCE_SYM)},
+   { "SPATIAL",		SYM(SPATIAL_SYM)},
+   { "SPECIFIC",         SYM(SPECIFIC_SYM)},
+   { "SQL",              SYM(SQL_SYM)},
+@@ -493,6 +504,8 @@
+   { "SUBPARTITIONS",    SYM(SUBPARTITIONS_SYM)},
+   { "SUPER",		SYM(SUPER_SYM)},
+   { "SUSPEND",          SYM(SUSPEND_SYM)},
++  { "SWAPS",      SYM(SWAPS_SYM)},
++  { "SWITCHES",   SYM(SWITCHES_SYM)},
+   { "TABLE",		SYM(TABLE_SYM)},
+   { "TABLES",		SYM(TABLES)},
+   { "TABLESPACE",	SYM(TABLESPACE)},
+diff -Nru a/sql/lock.cc b/sql/lock.cc
+--- a/sql/lock.cc	2005-11-14 03:09:22 -08:00
++++ b/sql/lock.cc	2005-11-14 03:09:22 -08:00
+@@ -145,14 +145,14 @@
+       }
+     }
+ 
+-    thd->proc_info="System lock";
++    THD_PROC_INFO(thd, "System lock");
+     if (lock_external(thd, tables, count))
+     {
+       my_free((gptr) sql_lock,MYF(0));
+       sql_lock=0;
+       break;
+     }
+-    thd->proc_info="Table lock";
++    THD_PROC_INFO(thd, "Table lock");
+     thd->locked=1;
+     rc= thr_lock_errno_to_mysql[(int) thr_multi_lock(sql_lock->locks,
+                                                      sql_lock->lock_count,
+@@ -181,7 +181,7 @@
+       thd->locked=0;
+       break;
+     }
+-    thd->proc_info=0;
++    THD_PROC_INFO(thd, 0);
+ 
+     /* some table was altered or deleted. reopen tables marked deleted */
+     mysql_unlock_tables(thd,sql_lock);
+@@ -196,7 +196,7 @@
+     if (wait_for_tables(thd))
+       break;					// Couldn't open tables
+   }
+-  thd->proc_info=0;
++  THD_PROC_INFO(thd, 0);
+   if (thd->killed)
+   {
+     thd->send_kill_message();
+diff -Nru a/sql/mysql_priv.h b/sql/mysql_priv.h
+--- a/sql/mysql_priv.h	2005-11-14 03:09:22 -08:00
++++ b/sql/mysql_priv.h	2005-11-14 03:09:22 -08:00
+@@ -112,6 +112,8 @@
+ #define BDB_LOG_ALLOC_BLOCK_SIZE	1024
+ #define WARN_ALLOC_BLOCK_SIZE		2048
+ #define WARN_ALLOC_PREALLOC_SIZE	1024
++#define PROFILE_ALLOC_BLOCK_SIZE  2048
++#define PROFILE_ALLOC_PREALLOC_SIZE 1024
+ 
+ /*
+   The following parameters is to decide when to use an extra cache to
+@@ -486,6 +488,8 @@
+ #include "protocol.h"
+ #include "sql_plugin.h"
+ #include "sql_udf.h"
++#include "sql_profile.h"
++
+ class user_var_entry;
+ class Security_context;
+ enum enum_var_type
+diff -Nru a/sql/sql_base.cc b/sql/sql_base.cc
+--- a/sql/sql_base.cc	2005-11-14 03:09:21 -08:00
++++ b/sql/sql_base.cc	2005-11-14 03:09:21 -08:00
+@@ -308,7 +308,7 @@
+     */
+     thd->mysys_var->current_mutex= &LOCK_open;
+     thd->mysys_var->current_cond= &COND_refresh;
+-    thd->proc_info="Flushing tables";
++    thd->proc_info= "Flushing tables";
+ 
+     close_old_data_files(thd,thd->open_tables,1,1);
+     mysql_ha_flush(thd, tables, MYSQL_HA_REOPEN_ON_USAGE | MYSQL_HA_FLUSH_ALL);
+@@ -348,7 +348,7 @@
+     pthread_mutex_lock(&thd->mysys_var->mutex);
+     thd->mysys_var->current_mutex= 0;
+     thd->mysys_var->current_cond= 0;
+-    thd->proc_info=0;
++    thd->proc_info= 0;
+     pthread_mutex_unlock(&thd->mysys_var->mutex);
+   }
+   DBUG_RETURN(result);
+@@ -963,7 +963,7 @@
+   thd->mysys_var->current_mutex= &LOCK_open;
+   thd->mysys_var->current_cond= &COND_refresh;
+   proc_info=thd->proc_info;
+-  thd->proc_info="Waiting for table";
++  THD_PROC_INFO(thd, "Waiting for table");
+   if (!thd->killed)
+     (void) pthread_cond_wait(&COND_refresh,&LOCK_open);
+ 
+@@ -971,7 +971,7 @@
+   pthread_mutex_lock(&thd->mysys_var->mutex);
+   thd->mysys_var->current_mutex= 0;
+   thd->mysys_var->current_cond= 0;
+-  thd->proc_info= proc_info;
++  THD_PROC_INFO(thd,  proc_info);
+   pthread_mutex_unlock(&thd->mysys_var->mutex);
+ }
+ 
+@@ -1635,7 +1635,7 @@
+   bool result;
+   DBUG_ENTER("wait_for_tables");
+ 
+-  thd->proc_info="Waiting for tables";
++  THD_PROC_INFO(thd, "Waiting for tables");
+   pthread_mutex_lock(&LOCK_open);
+   while (!thd->killed)
+   {
+@@ -1651,12 +1651,12 @@
+   else
+   {
+     /* Now we can open all tables without any interference */
+-    thd->proc_info="Reopen tables";
++    THD_PROC_INFO(thd, "Reopen tables");
+     thd->version= refresh_version;
+     result=reopen_tables(thd,0,0);
+   }
+   pthread_mutex_unlock(&LOCK_open);
+-  thd->proc_info=0;
++  THD_PROC_INFO(thd, 0);
+   DBUG_RETURN(result);
+ }
+ 
+@@ -1950,7 +1950,7 @@
+  restart:
+   *counter= 0;
+   query_tables_last_own= 0;
+-  thd->proc_info="Opening tables";
++  THD_PROC_INFO(thd, "Opening tables");
+ 
+   /*
+     If we are not already executing prelocked statement and don't have
+@@ -2136,7 +2136,7 @@
+       sp_cache_routines_and_add_tables_for_view(thd, thd->lex, tables->view);
+     }
+   }
+-  thd->proc_info=0;
++  THD_PROC_INFO(thd, 0);
+   free_root(&new_frm_mem, MYF(0));              // Free pre-alloced block
+ 
+   if (query_tables_last_own)
+@@ -2210,7 +2210,7 @@
+   bool refresh;
+   DBUG_ENTER("open_ltable");
+ 
+-  thd->proc_info="Opening table";
++  THD_PROC_INFO(thd, "Opening table");
+   thd->current_tablenr= 0;
+   /* open_ltable can be used only for BASIC TABLEs */
+   table_list->required_type= FRMTYPE_TABLE;
+@@ -2244,7 +2244,7 @@
+ 	  table= 0;
+     }
+   }
+-  thd->proc_info=0;
++  THD_PROC_INFO(thd, 0);
+   DBUG_RETURN(table);
+ }
+ 
+@@ -5243,7 +5243,7 @@
+     List_iterator<Item_func_match> li(*(select_lex->ftfunc_list));
+     Item_func_match *ifm;
+     DBUG_PRINT("info",("Performing FULLTEXT search"));
+-    thd->proc_info="FULLTEXT initialization";
++    THD_PROC_INFO(thd, "FULLTEXT initialization");
+ 
+     while ((ifm=li++))
+       ifm->init_search(no_order);
+diff -Nru a/sql/sql_cache.cc b/sql/sql_cache.cc
+--- a/sql/sql_cache.cc	2005-11-14 03:09:22 -08:00
++++ b/sql/sql_cache.cc	2005-11-14 03:09:22 -08:00
+@@ -685,6 +685,7 @@
+ 				      thd->net.query_cache_query);
+     if (query_block)
+     {
++      THD_PROC_INFO(thd, "storing result in query cache");
+       DUMP(&query_cache);
+       BLOCK_LOCK_WR(query_block);
+       Query_cache_query *header = query_block->query();
+@@ -963,7 +964,7 @@
+   ulong tot_length;
+   Query_cache_query_flags flags;
+   DBUG_ENTER("Query_cache::send_result_to_client");
+-
++  
+   if (query_cache_size == 0 || thd->locked_tables ||
+       thd->variables.query_cache_type == 0)
+     goto err;
+@@ -1014,6 +1015,8 @@
+     DBUG_PRINT("qcache", ("No active database"));
+   }
+ 
++  THD_PROC_INFO(thd, "checking query cache for query");
++
+   // fill all gaps between fields with 0 to get repeatable key
+   bzero(&flags, QUERY_CACHE_FLAGS_SIZE);
+   flags.client_long_flag= test(thd->client_capabilities & CLIENT_LONG_FLAG);
+@@ -1087,6 +1090,7 @@
+   }
+       
+   // Check access;
++  THD_PROC_INFO(thd, "checking privileges on cached query");
+   block_table= query_block->table(0);
+   block_table_end= block_table+query_block->n_tables;
+   for (; block_table != block_table_end; block_table++)
+@@ -1179,6 +1183,7 @@
+     Send cached result to client
+   */
+ #ifndef EMBEDDED_LIBRARY
++  THD_PROC_INFO(thd, "sending cached result to client");
+   do
+   {
+     DBUG_PRINT("qcache", ("Results  (len %lu, used %lu, headers %lu)",
+@@ -1226,6 +1231,7 @@
+   DBUG_ENTER("Query_cache::invalidate (table list)");
+   if (query_cache_size > 0)
+   {
++    THD_PROC_INFO(thd, "invalidating query cache entries (table list)");
+     STRUCT_LOCK(&structure_guard_mutex);
+     if (query_cache_size > 0)
+     {
+@@ -1321,6 +1327,7 @@
+   
+   if (query_cache_size > 0)
+   {
++    THD_PROC_INFO(thd, "invalidating query cache entries (table)");
+     STRUCT_LOCK(&structure_guard_mutex);
+     if (query_cache_size > 0)
+     {
+@@ -1344,6 +1351,7 @@
+   
+   if (query_cache_size > 0)
+   {
++    THD_PROC_INFO(thd, "invalidating query cache entries (key)");
+     using_transactions = using_transactions &&
+       (thd->options & (OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN));
+     if (using_transactions) // used for innodb => has_transactions() is TRUE
+diff -Nru a/sql/sql_class.cc b/sql/sql_class.cc
+--- a/sql/sql_class.cc	2005-11-14 03:09:21 -08:00
++++ b/sql/sql_class.cc	2005-11-14 03:09:21 -08:00
+@@ -243,6 +243,7 @@
+   init();
+   /* Initialize sub structures */
+   init_sql_alloc(&warn_root, WARN_ALLOC_BLOCK_SIZE, WARN_ALLOC_PREALLOC_SIZE);
++  profiling.set_thd(this);
+   user_connect=(USER_CONN *)0;
+   hash_init(&user_vars, system_charset_info, USER_VARS_HASH_SIZE, 0, 0,
+ 	    (hash_get_key) get_var_key,
+@@ -323,6 +324,7 @@
+                       variables.trans_alloc_block_size,
+                       variables.trans_prealloc_size);
+ #endif
++  profiling.reset();
+   transaction.xid_state.xid.null();
+   transaction.xid_state.in_thd=1;
+ }
+diff -Nru a/sql/sql_class.h b/sql/sql_class.h
+--- a/sql/sql_class.h	2005-11-14 03:09:22 -08:00
++++ b/sql/sql_class.h	2005-11-14 03:09:22 -08:00
+@@ -1315,6 +1315,9 @@
+   List	     <MYSQL_ERROR> warn_list;
+   uint	     warn_count[(uint) MYSQL_ERROR::WARN_LEVEL_END];
+   uint	     total_warn_count;
++  
++  PROFILING  profiling;
++
+   /*
+     Id of current query. Statement can be reused to execute several queries
+     query_id is global in context of the whole MySQL server.
+diff -Nru a/sql/sql_delete.cc b/sql/sql_delete.cc
+--- a/sql/sql_delete.cc	2005-11-14 03:09:22 -08:00
++++ b/sql/sql_delete.cc	2005-11-14 03:09:22 -08:00
+@@ -51,7 +51,7 @@
+     DBUG_RETURN(TRUE);
+   }
+   table->file->info(HA_STATUS_VARIABLE | HA_STATUS_NO_LOCK);
+-  thd->proc_info="init";
++  THD_PROC_INFO(thd, "init");
+   table->map=1;
+ 
+   if (mysql_prepare_delete(thd, table_list, &conds))
+@@ -192,7 +192,7 @@
+ 
+   deleted=0L;
+   init_ftfuncs(thd, select_lex, 1);
+-  thd->proc_info="updating";
++  THD_PROC_INFO(thd, "updating");
+   will_batch= !table->file->start_bulk_delete();
+   while (!(error=info.read_record(&info)) && !thd->killed &&
+ 	 !thd->net.report_error)
+@@ -251,7 +251,7 @@
+       table->file->print_error(loc_error,MYF(0));
+     error=1;
+   }
+-  thd->proc_info= "end";
++  THD_PROC_INFO(thd,  "end");
+   end_read_record(&info);
+   free_io_cache(table);				// Will not do any harm
+   if (options & OPTION_QUICK)
+@@ -471,7 +471,7 @@
+   DBUG_ENTER("multi_delete::prepare");
+   unit= u;
+   do_delete= 1;
+-  thd->proc_info="deleting from main table";
++  THD_PROC_INFO(thd, "deleting from main table");
+   DBUG_RETURN(0);
+ }
+ 
+@@ -743,7 +743,7 @@
+ 
+ bool multi_delete::send_eof()
+ {
+-  thd->proc_info="deleting from reference tables";
++  THD_PROC_INFO(thd, "deleting from reference tables");
+ 
+   /* Does deletes for the last n - 1 tables, returns 0 if ok */
+   int local_error= do_deletes();		// returns 0 if success
+@@ -752,7 +752,7 @@
+   local_error= local_error || error;
+ 
+   /* reset used flags */
+-  thd->proc_info="end";
++  THD_PROC_INFO(thd, "end");
+ 
+   /*
+     We must invalidate the query cache before binlog writing and
+diff -Nru a/sql/sql_insert.cc b/sql/sql_insert.cc
+--- a/sql/sql_insert.cc	2005-11-14 03:09:22 -08:00
++++ b/sql/sql_insert.cc	2005-11-14 03:09:22 -08:00
+@@ -366,7 +366,7 @@
+   if (res || thd->is_fatal_error)
+     DBUG_RETURN(TRUE);
+ 
+-  thd->proc_info="init";
++  THD_PROC_INFO(thd, "init");
+   thd->used_tables=0;
+   values= its++;
+ 
+@@ -441,7 +441,7 @@
+ 
+   error=0;
+   id=0;
+-  thd->proc_info="update";
++  THD_PROC_INFO(thd, "update");
+   if (duplic != DUP_ERROR || ignore)
+     table->file->extra(HA_EXTRA_IGNORE_DUP_KEY);
+   /*
+@@ -621,7 +621,7 @@
+       thd->lock=0;
+     }
+   }
+-  thd->proc_info="end";
++  THD_PROC_INFO(thd, "end");
+   table->next_number_field=0;
+   thd->count_cuted_fields= CHECK_FIELD_IGNORE;
+   thd->next_insert_id=0;			// Reset this if wrongly used
+@@ -1351,7 +1351,7 @@
+ 
+ delayed_insert *find_handler(THD *thd, TABLE_LIST *table_list)
+ {
+-  thd->proc_info="waiting for delay_list";
++  THD_PROC_INFO(thd, "waiting for delay_list");
+   pthread_mutex_lock(&LOCK_delayed_insert);	// Protect master list
+   I_List_iterator<delayed_insert> it(delayed_threads);
+   delayed_insert *tmp;
+@@ -1388,7 +1388,7 @@
+     */
+     if (delayed_insert_threads >= thd->variables.max_insert_delayed_threads)
+       DBUG_RETURN(0);
+-    thd->proc_info="Creating delayed handler";
++    THD_PROC_INFO(thd, "Creating delayed handler");
+     pthread_mutex_lock(&LOCK_delayed_create);
+     /*
+       The first search above was done without LOCK_delayed_create.
+@@ -1442,7 +1442,7 @@
+       }
+ 
+       /* Wait until table is open */
+-      thd->proc_info="waiting for handler open";
++      THD_PROC_INFO(thd, "waiting for handler open");
+       while (!tmp->thd.killed && !tmp->table && !thd->killed)
+       {
+ 	pthread_cond_wait(&tmp->cond_client,&tmp->mutex);
+@@ -1453,7 +1453,7 @@
+         everyone, who might want to set a global read lock.
+       */
+       start_waiting_global_read_lock(thd);
+-      thd->proc_info="got old table";
++      THD_PROC_INFO(thd, "got old table");
+       if (tmp->thd.killed)
+       {
+ 	if (tmp->thd.is_fatal_error)
+@@ -1517,13 +1517,13 @@
+   tables_in_use++;
+   if (!thd.lock)				// Table is not locked
+   {
+-    client_thd->proc_info="waiting for handler lock";
++    client_thd->proc_info= "waiting for handler lock";
+     pthread_cond_signal(&cond);			// Tell handler to lock table
+     while (!dead && !thd.lock && ! client_thd->killed)
+     {
+       pthread_cond_wait(&cond_client,&mutex);
+     }
+-    client_thd->proc_info="got handler lock";
++    client_thd->proc_info= "got handler lock";
+     if (client_thd->killed)
+       goto error;
+     if (dead)
+@@ -1534,7 +1534,7 @@
+     }
+   }
+ 
+-  client_thd->proc_info="allocating local table";
++  client_thd->proc_info= "allocating local table";
+   copy= (TABLE*) client_thd->alloc(sizeof(*copy)+
+ 				   (table->s->fields+1)*sizeof(Field**)+
+ 				   table->s->reclength);
+@@ -1602,11 +1602,11 @@
+   delayed_insert *di=thd->di;
+   DBUG_ENTER("write_delayed");
+ 
+-  thd->proc_info="waiting for handler insert";
++  THD_PROC_INFO(thd, "waiting for handler insert");
+   pthread_mutex_lock(&di->mutex);
+   while (di->stacked_inserts >= delayed_queue_size && !thd->killed)
+     pthread_cond_wait(&di->cond_client,&di->mutex);
+-  thd->proc_info="storing row into queue";
++  THD_PROC_INFO(thd, "storing row into queue");
+ 
+   if (thd->killed || !(row= new delayed_row(duplic, ignore, log_on)))
+     goto err;
+@@ -1954,7 +1954,7 @@
+ 
+   table->next_number_field=table->found_next_number_field;
+ 
+-  thd.proc_info="upgrading lock";
++  THD_PROC_INFO(&thd, "upgrading lock");
+   if (thr_upgrade_write_delay_lock(*thd.lock->locks))
+   {
+     /* This can only happen if thread is killed by shutdown */
+@@ -1962,7 +1962,7 @@
+     goto err;
+   }
+ 
+-  thd.proc_info="insert";
++  THD_PROC_INFO(&thd, "insert");
+   max_rows= delayed_insert_limit;
+   if (thd.killed || table->s->version != refresh_version)
+   {
+@@ -2038,7 +2038,7 @@
+       {
+ 	if (tables_in_use)
+ 	  pthread_cond_broadcast(&cond_client); // If waiting clients
+-	thd.proc_info="reschedule";
++	THD_PROC_INFO(&thd, "reschedule");
+ 	pthread_mutex_unlock(&mutex);
+ 	if ((error=table->file->extra(HA_EXTRA_NO_CACHE)))
+ 	{
+@@ -2056,7 +2056,7 @@
+ 	if (!using_bin_log)
+ 	  table->file->extra(HA_EXTRA_WRITE_CACHE);
+ 	pthread_mutex_lock(&mutex);
+-	thd.proc_info="insert";
++	THD_PROC_INFO(&thd, "insert");
+       }
+       if (tables_in_use)
+ 	pthread_cond_broadcast(&cond_client);	// If waiting clients
+diff -Nru a/sql/sql_lex.cc b/sql/sql_lex.cc
+--- a/sql/sql_lex.cc	2005-11-14 03:09:22 -08:00
++++ b/sql/sql_lex.cc	2005-11-14 03:09:22 -08:00
+@@ -178,6 +178,7 @@
+   lex->proc_list.first= 0;
+   lex->query_tables_own_last= 0;
+   lex->escape_used= FALSE;
++  lex->profile_options= PROFILE_NONE;
+ 
+   if (lex->sroutines.records)
+     my_hash_reset(&lex->sroutines);
+diff -Nru a/sql/sql_lex.h b/sql/sql_lex.h
+--- a/sql/sql_lex.h	2005-11-14 03:09:21 -08:00
++++ b/sql/sql_lex.h	2005-11-14 03:09:21 -08:00
+@@ -92,6 +92,7 @@
+   SQLCOM_XA_START, SQLCOM_XA_END, SQLCOM_XA_PREPARE,
+   SQLCOM_XA_COMMIT, SQLCOM_XA_ROLLBACK, SQLCOM_XA_RECOVER,
+   SQLCOM_INSTALL_PLUGIN, SQLCOM_UNINSTALL_PLUGIN,
++  SQLCOM_SHOW_PROFILE, SQLCOM_SHOW_PROFILES,
+   /* This should be the last !!! */
+ 
+   SQLCOM_END
+@@ -806,6 +807,7 @@
+   enum enum_var_type option_type;
+   enum enum_view_create_mode create_view_mode;
+   enum enum_drop_mode drop_mode;
++  uint profile_options;
+   uint uint_geom_type;
+   uint grant, grant_tot_col, which_columns;
+   uint fk_delete_opt, fk_update_opt, fk_match_option;
+diff -Nru a/sql/sql_parse.cc b/sql/sql_parse.cc
+--- a/sql/sql_parse.cc	2005-11-14 03:09:21 -08:00
++++ b/sql/sql_parse.cc	2005-11-14 03:09:21 -08:00
+@@ -2039,7 +2039,7 @@
+   if (thd->lock || thd->open_tables || thd->derived_tables ||
+       thd->prelocked_mode)
+   {
+-    thd->proc_info="closing tables";
++    THD_PROC_INFO(thd, "closing tables");
+     close_thread_tables(thd);			/* Free tables */
+   }
+   /*
+@@ -2062,7 +2062,7 @@
+ 
+   log_slow_statement(thd);
+ 
+-  thd->proc_info="cleaning up";
++  THD_PROC_INFO(thd, "cleaning up");
+   VOID(pthread_mutex_lock(&LOCK_thread_count)); // For process list
+   thd->proc_info=0;
+   thd->command=COM_SLEEP;
+@@ -2097,14 +2097,13 @@
+   */
+   if (thd->enable_slow_log && !thd->user_time)
+   {
+-    thd->proc_info="logging slow query";
+-
+     if ((ulong) (thd->start_time - thd->time_after_lock) >
+ 	thd->variables.long_query_time ||
+ 	((thd->server_status &
+ 	  (SERVER_QUERY_NO_INDEX_USED | SERVER_QUERY_NO_GOOD_INDEX_USED)) &&
+ 	 (specialflag & SPECIAL_LOG_QUERIES_NOT_USING_INDEXES)))
+     {
++      THD_PROC_INFO(thd, "logging slow query");
+       thd->status_var.long_query_count++;
+       mysql_slow_log.write(thd, thd->query, thd->query_length, start_of_query);
+     }
+@@ -2575,6 +2574,20 @@
+ 			      (1L << (uint) MYSQL_ERROR::WARN_LEVEL_ERROR));
+     break;
+   }
++  case SQLCOM_SHOW_PROFILES:
++  {
++    thd->profiling.store();
++    thd->profiling.discard();
++    res= thd->profiling.show_profiles();
++    break;
++  }
++  case SQLCOM_SHOW_PROFILE:
++  {
++    thd->profiling.store();
++    thd->profiling.discard(); // will get re-enabled by reset()
++    res= thd->profiling.show_last(lex->profile_options);
++    break;
++  }
+   case SQLCOM_SHOW_NEW_MASTER:
+   {
+     if (check_global_access(thd, REPL_SLAVE_ACL))
+@@ -3328,7 +3341,7 @@
+     if (add_item_to_list(thd, new Item_null()))
+       goto error;
+ 
+-    thd->proc_info="init";
++    THD_PROC_INFO(thd, "init");
+     if ((res= open_and_lock_tables(thd, all_tables)))
+       break;
+ 
+@@ -4775,7 +4788,7 @@
+     send_ok(thd);
+     break;
+   }
+-  thd->proc_info="query end";
++  THD_PROC_INFO(thd, "query end");
+   /* Two binlog-related cleanups: */
+ 
+   /*
+@@ -4891,6 +4904,8 @@
+   else
+     save_priv= &dummy;
+ 
++  THD_PROC_INFO(thd, "checking permissions");
++
+   if ((!db || !db[0]) && !thd->db && !dont_check_global_grants)
+   {
+     DBUG_PRINT("error",("No database"));
+@@ -5327,6 +5342,7 @@
+     thd->total_warn_count=0;			// Warnings for this query
+     thd->rand_used= 0;
+     thd->sent_row_count= thd->examined_row_count= 0;
++    thd->profiling.reset();
+   }
+   DBUG_VOID_RETURN;
+ }
+@@ -5571,7 +5587,7 @@
+ 	thd->lex->sphead= NULL;
+       }
+     }
+-    thd->proc_info="freeing items";
++    THD_PROC_INFO(thd, "freeing items");
+     thd->end_statement();
+     thd->cleanup_after_query();
+     DBUG_ASSERT(thd->change_list.is_empty());
+diff -Nru a/sql/sql_profile.cc b/sql/sql_profile.cc
+--- /dev/null	Wed Dec 31 16:00:00 196900
++++ b/sql/sql_profile.cc	2005-11-14 03:09:22 -08:00
+@@ -0,0 +1,424 @@
++/* Copyright (C) 2005 MySQL AB
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 2 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA */
++
++#include "mysql_priv.h"
++#include "sp_rcontext.h"
++
++#define RUSAGE_USEC(tv)  ((tv).tv_sec*1000000 + (tv).tv_usec)
++#define RUSAGE_DIFF_USEC(tv1, tv2) (RUSAGE_USEC((tv1))-RUSAGE_USEC((tv2)))
++
++PROFILE_ENTRY::PROFILE_ENTRY()
++  :status(NULL), time(0), function(NULL), file(NULL), line(0)
++{
++  collect();
++}
++
++PROFILE_ENTRY::PROFILE_ENTRY(PROFILE *profile_arg, const char *status_arg)
++  :profile(profile_arg), function(NULL), file(NULL), line(0)
++{
++  collect();
++  if (status_arg)
++    set_status(status_arg);
++}
++
++PROFILE_ENTRY::PROFILE_ENTRY(PROFILE *profile_arg, const char *status_arg,
++                             const char *function_arg,
++                             const char *file_arg, unsigned int line_arg)
++  :profile(profile_arg)
++{
++  collect();
++  if (status_arg)
++    set_status(status_arg);
++  if (function_arg)
++    function= strdup_root(&profile->profiling->root, function_arg);
++  if (file_arg)
++    file= strdup_root(&profile->profiling->root, file_arg);
++  line= line_arg;
++}
++
++PROFILE_ENTRY::~PROFILE_ENTRY()
++{
++  if (status)
++    free(status);
++  if (function)
++    free(function);
++  if (file)
++    free(file);
++}
++  
++void PROFILE_ENTRY::set_status(const char *status_arg)
++{
++  status= strdup_root(&profile->profiling->root, status_arg);
++}
++
++void PROFILE_ENTRY::collect()
++{
++  time= my_getsystime();
++  getrusage(RUSAGE_SELF, &rusage);
++}
++
++PROFILE::PROFILE(PROFILING *profiling_arg)
++  :profiling(profiling_arg)
++{
++  profile_end= &profile_start;
++}
++
++PROFILE::~PROFILE()
++{
++  entries.empty();
++}
++
++void PROFILE::status(const char *status_arg,
++                     const char *function_arg=NULL,
++                     const char *file_arg=NULL, unsigned int line_arg=0)
++{
++  PROFILE_ENTRY *prof= NULL;
++  MEM_ROOT *old_root= NULL;
++  THD *thd= profiling->thd;
++
++  DBUG_ENTER("PROFILE::status");
++
++  /* Blank status.  Jump to set_status with a NULL status_arg to set blank. */
++  if (unlikely(!status_arg))
++    DBUG_VOID_RETURN;
++
++  /* If thd->proc_info is currently set to status_arg, don't profile twice. */
++  if (unlikely(thd->proc_info && !(strcmp(thd->proc_info, status_arg))))
++    DBUG_VOID_RETURN;
++
++  /* Is this the same query as our profile currently contains? */
++  if (unlikely(thd->query_id != query_id && !thd->spcont))
++    reset();
++    
++  /*
++    In order to keep the profile information between queries (i.e. from
++    SELECT to the following SHOW PROFILE command) the following code is
++    necessary to keep the profile from getting freed automatically when
++    mysqld cleans up after the query.  This code is shamelessly stolen
++    from SHOW WARNINGS.
++    
++    The thd->mem_root structure is freed after each query is completed,
++    so temporarily override it.
++  */
++  old_root= thd->mem_root;
++  thd->mem_root= &profiling->root;
++  if (function_arg && file_arg) {
++    if ((profile_end= prof= new PROFILE_ENTRY(this, status_arg, function_arg, file_arg, line_arg)))
++      entries.push_back(prof);
++  } else {
++    if ((profile_end= prof= new PROFILE_ENTRY(this, status_arg)))
++      entries.push_back(prof);
++  }
++  thd->mem_root= old_root;
++  
++  DBUG_VOID_RETURN;
++}
++
++void PROFILE::reset()
++{
++  DBUG_ENTER("PROFILE::reset");
++  if (profiling->thd->query_id != query_id)
++  {
++    query_id= profiling->thd->query_id;
++    profile_start.collect();
++    entries.empty();
++  }
++  DBUG_VOID_RETURN;
++}
++
++bool PROFILE::show(uint options)
++{  
++  PROFILE_ENTRY *prof;
++  THD *thd= profiling->thd;
++  PROFILE_ENTRY *ps= &profile_start;
++  List<Item> field_list;
++  DBUG_ENTER("PROFILE::show");
++
++  field_list.push_back(new Item_empty_string("Status", MYSQL_ERRMSG_SIZE));
++  field_list.push_back(new Item_return_int("Time_elapsed", 20,
++                                           MYSQL_TYPE_LONGLONG));
++
++  if (options & PROFILE_CPU)
++  {
++    field_list.push_back(new Item_return_int("CPU_user", 20,
++                                             MYSQL_TYPE_LONGLONG));
++    field_list.push_back(new Item_return_int("CPU_system", 20, 
++                                             MYSQL_TYPE_LONGLONG));
++  }
++  
++  if (options & PROFILE_MEMORY)
++  {
++  }
++  
++  if (options & PROFILE_CONTEXT)
++  {
++    field_list.push_back(new Item_return_int("Context_voluntary", 10,
++                                             MYSQL_TYPE_LONG));
++    field_list.push_back(new Item_return_int("Context_involuntary", 10,
++                                             MYSQL_TYPE_LONG));
++  }
++
++  if (options & PROFILE_BLOCK_IO)
++  {
++    field_list.push_back(new Item_return_int("Block_ops_in", 10,
++                                             MYSQL_TYPE_LONG));
++    field_list.push_back(new Item_return_int("Block_ops_out", 10,
++                                             MYSQL_TYPE_LONG));
++  }
++  
++  if (options & PROFILE_IPC)
++  {
++    field_list.push_back(new Item_return_int("Messages_sent", 10,
++                                             MYSQL_TYPE_LONG));
++    field_list.push_back(new Item_return_int("Messages_received", 10,
++                                             MYSQL_TYPE_LONG));
++  }
++  
++  if (options & PROFILE_PAGE_FAULTS)
++  {
++    field_list.push_back(new Item_return_int("Page_faults_major", 10,
++                                             MYSQL_TYPE_LONG));
++    field_list.push_back(new Item_return_int("Page_faults_minor", 10,
++                                             MYSQL_TYPE_LONG));
++  }
++  
++  if (options & PROFILE_SWAPS)
++  {
++    field_list.push_back(new Item_return_int("Swaps", 10, MYSQL_TYPE_LONG));
++  }
++  
++  if(options & PROFILE_SOURCE)
++  {
++    field_list.push_back(new Item_empty_string("Source_function",
++                                               MYSQL_ERRMSG_SIZE));  
++    field_list.push_back(new Item_empty_string("Source_file",
++                                               MYSQL_ERRMSG_SIZE));
++    field_list.push_back(new Item_return_int("Source_line", 10,
++                                             MYSQL_TYPE_LONG));
++  }
++  
++  if (thd->protocol->send_fields(&field_list,
++                                 Protocol::SEND_NUM_ROWS | Protocol::SEND_EOF))
++    DBUG_RETURN(TRUE);
++
++  SELECT_LEX *sel= &thd->lex->select_lex;
++  SELECT_LEX_UNIT *unit= &thd->lex->unit;
++  ha_rows idx= 0;
++  Protocol *protocol=thd->protocol;
++
++  unit->set_limit(sel);
++
++  List_iterator<PROFILE_ENTRY> it(entries);
++  ulonglong last_time= ps->time;
++  while ((prof= it++))
++  {
++    if (++idx <= unit->offset_limit_cnt)
++      continue;
++    if (idx > unit->select_limit_cnt)
++      break;
++
++    protocol->prepare_for_resend();
++    protocol->store(prof->status, strlen(prof->status), system_charset_info);
++    protocol->store((ulonglong)(prof->time - ps->time)/10);
++
++    if (options & PROFILE_CPU)
++    {
++      protocol->store((ulonglong)RUSAGE_DIFF_USEC(prof->rusage.ru_utime,
++                                                  ps->rusage.ru_utime));
++      protocol->store((ulonglong)RUSAGE_DIFF_USEC(prof->rusage.ru_stime,
++                                                  ps->rusage.ru_stime));
++    }
++    
++    if (options & PROFILE_CONTEXT)
++    {
++      protocol->store((uint32)(prof->rusage.ru_nvcsw - ps->rusage.ru_nvcsw));
++      protocol->store((uint32)(prof->rusage.ru_nivcsw - ps->rusage.ru_nivcsw));
++    }
++
++    if (options & PROFILE_BLOCK_IO)
++    {
++      protocol->store((uint32)(prof->rusage.ru_inblock-ps->rusage.ru_inblock));
++      protocol->store((uint32)(prof->rusage.ru_oublock-ps->rusage.ru_oublock));
++    }
++    
++    if (options & PROFILE_IPC)
++    {
++      protocol->store((uint32)(prof->rusage.ru_msgsnd - ps->rusage.ru_msgsnd));
++      protocol->store((uint32)(prof->rusage.ru_msgrcv - ps->rusage.ru_msgrcv));
++    }
++    
++    if (options & PROFILE_PAGE_FAULTS)
++    {
++      protocol->store((uint32)(prof->rusage.ru_majflt - ps->rusage.ru_majflt));
++      protocol->store((uint32)(prof->rusage.ru_minflt - ps->rusage.ru_minflt));
++    }
++
++    if (options & PROFILE_SWAPS)
++    {
++      protocol->store((uint32)(prof->rusage.ru_nswap - ps->rusage.ru_nswap));
++    }
++    
++    if (options & PROFILE_SOURCE)
++    {
++      if(prof->function && prof->file)
++      {
++        protocol->store(prof->function, strlen(prof->function), system_charset_info);        
++        protocol->store(prof->file, strlen(prof->file), system_charset_info);
++        protocol->store(prof->line);
++      } else {
++        protocol->store("(unknown)", 10, system_charset_info);
++        protocol->store("(unknown)", 10, system_charset_info);
++        protocol->store((uint32) 0);
++      }
++    }
++
++    if (protocol->write())
++      DBUG_RETURN(TRUE);
++    last_time= prof->time;
++  }
++  send_eof(thd);
++  DBUG_RETURN(FALSE);
++}
++
++PROFILING::PROFILING()
++  :enabled(1), keeping(1), current(NULL), last(NULL)
++{
++  init_sql_alloc(&root,
++                 PROFILE_ALLOC_BLOCK_SIZE,
++                 PROFILE_ALLOC_PREALLOC_SIZE);
++}
++
++PROFILING::~PROFILING()
++{
++  free_root(&root, MYF(0));
++}
++
++void PROFILING::status(const char *status_arg,
++                       const char *function_arg,
++                       const char *file_arg, unsigned int line_arg)
++{
++  DBUG_ENTER("PROFILING::status");
++  
++  if(!current)
++    reset();
++
++  if(unlikely(enabled))
++    current->status(status_arg, function_arg, file_arg, line_arg);
++  
++  thd->proc_info= status_arg;
++  
++  DBUG_VOID_RETURN;
++}
++
++void PROFILING::store()
++{
++  MEM_ROOT *old_root;
++  DBUG_ENTER("PROFILING::store");
++
++  if (last && current && (last->query_id == current->query_id))
++    DBUG_VOID_RETURN;
++
++  if (history.elements > 10)
++  {
++    PROFILE *tmp= history.pop();
++    delete tmp;
++  }
++
++  old_root= thd->mem_root;
++  thd->mem_root= &root;
++  
++  if (current)
++  {
++    if (keeping && (!current->entries.is_empty())) {
++      last= current;
++      history.push_back(current);
++      current= NULL;
++    } else {
++      delete current;
++    }
++  }
++  
++  current= new PROFILE(this);
++  thd->mem_root= old_root;
++
++  DBUG_VOID_RETURN;
++}
++
++void PROFILING::reset()
++{
++  DBUG_ENTER("PROFILING::reset");
++
++  store();
++
++  current->reset();
++  /*free_root(&root, MYF(0));*/
++  keep();
++
++  DBUG_VOID_RETURN;
++}
++
++bool PROFILING::show_profiles()
++{
++  PROFILE *prof;
++  List<Item> field_list;
++  DBUG_ENTER("PROFILING::list_all");
++
++  field_list.push_back(new Item_return_int("Query_ID", 10,
++                                           MYSQL_TYPE_LONG));
++  field_list.push_back(new Item_return_int("Time", 20,
++                                           MYSQL_TYPE_LONGLONG));
++                                           
++  if (thd->protocol->send_fields(&field_list,
++                                 Protocol::SEND_NUM_ROWS | Protocol::SEND_EOF))
++    DBUG_RETURN(TRUE);
++    
++  SELECT_LEX *sel= &thd->lex->select_lex;
++  SELECT_LEX_UNIT *unit= &thd->lex->unit;
++  ha_rows idx= 0;
++  Protocol *protocol=thd->protocol;
++
++  unit->set_limit(sel);
++  
++  List_iterator<PROFILE> it(history);
++  while ((prof= it++))
++  {
++    PROFILE_ENTRY *ps= &prof->profile_start;
++    PROFILE_ENTRY *pe=  prof->profile_end;
++
++    if (++idx <= unit->offset_limit_cnt)
++      continue;
++    if (idx > unit->select_limit_cnt)
++      break;
++
++    protocol->prepare_for_resend();
++    protocol->store((uint32)(prof->query_id));
++    protocol->store((ulonglong)((pe->time - ps->time)/10));
++    
++    if (protocol->write())
++      DBUG_RETURN(TRUE);
++  }
++  send_eof(thd);
++  DBUG_RETURN(FALSE);
++}
++
++bool PROFILING::show_last(uint options)
++{
++  DBUG_ENTER("PROFILING::show_last");
++  if (!history.is_empty()) {
++    DBUG_RETURN(last->show(options));
++  }
++  DBUG_RETURN(TRUE);
++}
+diff -Nru a/sql/sql_profile.h b/sql/sql_profile.h
+--- /dev/null	Wed Dec 31 16:00:00 196900
++++ b/sql/sql_profile.h	2005-11-14 03:09:22 -08:00
+@@ -0,0 +1,145 @@
++/* Copyright (C) 2005 MySQL AB
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 2 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA */
++
++#ifndef SQL_PROFILE_H
++#define SQL_PROFILE_H
++
++#include <sys/time.h>
++#include <sys/resource.h>
++
++#if 1
++#define THD_PROC_INFO(thd, msg) if(unlikely((thd)->profiling.enabled)) { (thd)->profiling.status((msg), __FUNCTION__, __FILE__, __LINE__); } else { (thd)->proc_info= (msg); }
++#else
++#define THD_PROC_INFO(thd, msg) (thd)->proc_info= (msg);
++#endif
++
++#if 0
++
++     struct rusage {
++             struct timeval ru_utime; /* user time used */
++             struct timeval ru_stime; /* system time used */
++             long ru_maxrss;          /* integral max resident set size */
++             long ru_ixrss;           /* integral shared text memory size */
++             long ru_idrss;           /* integral unshared data size */
++             long ru_isrss;           /* integral unshared stack size */
++             long ru_minflt;          /* page reclaims */
++             long ru_majflt;          /* page faults */
++             long ru_nswap;           /* swaps */
++             long ru_inblock;         /* block input operations */
++             long ru_oublock;         /* block output operations */
++             long ru_msgsnd;          /* messages sent */
++             long ru_msgrcv;          /* messages received */
++             long ru_nsignals;        /* signals received */
++             long ru_nvcsw;           /* voluntary context switches */
++             long ru_nivcsw;          /* involuntary context switches */
++     };
++
++#endif
++
++#define PROFILE_NONE         0
++#define PROFILE_CPU          1
++#define PROFILE_MEMORY       2
++#define PROFILE_BLOCK_IO     4
++#define PROFILE_CONTEXT      8
++#define PROFILE_PAGE_FAULTS  16
++#define PROFILE_IPC          32
++#define PROFILE_SWAPS        64
++#define PROFILE_SOURCE       16384
++#define PROFILE_ALL          32767
++
++class PROFILE_ENTRY;
++class PROFILE;
++class PROFILING;
++
++class PROFILE_ENTRY: public Sql_alloc
++{
++public:
++  PROFILE   *profile;
++  char      *status;
++  ulonglong time;
++  struct rusage rusage;
++
++  char *function;
++  char *file;
++  unsigned int line;
++  
++  PROFILE_ENTRY();
++  PROFILE_ENTRY(PROFILE *profile_arg, const char *status_arg);
++  PROFILE_ENTRY(PROFILE *profile_arg, const char *status_arg,
++                const char *function_arg,
++                const char *file_arg, unsigned int line_arg);
++  ~PROFILE_ENTRY();
++
++  void set_status(const char *status_arg);
++  void collect();
++};
++
++class PROFILE: public Sql_alloc
++{
++public:
++  PROFILING *profiling;
++  query_id_t query_id;
++  PROFILE_ENTRY profile_start;
++  PROFILE_ENTRY *profile_end;
++  List<PROFILE_ENTRY> entries;
++
++  PROFILE(PROFILING *profiling_arg);
++  ~PROFILE();
++  
++  void status(const char *status_arg,
++              const char *function_arg,
++              const char *file_arg, unsigned int line_arg);
++  void reset();
++  
++  bool show(uint options);
++};
++
++class PROFILING: public Sql_alloc
++{
++public:
++  MEM_ROOT root;
++  THD *thd;
++  bool enabled;
++  bool keeping;
++
++  PROFILE       *current;
++  PROFILE       *last;
++  List<PROFILE> history;
++
++  PROFILING();
++  ~PROFILING();
++
++  inline void set_thd(THD *thd_arg) { thd= thd_arg; };
++
++  inline void enable()  { enabled= 1; };
++  inline void disable() { enabled= 0; };
++  
++  inline void keep()    { keeping= 1; };
++  inline void discard() { keeping= 0; };
++
++  void status(const char *status_arg,
++              const char *function_arg,
++              const char *file_arg, unsigned int line_arg);
++
++  void store();
++  void reset();
++
++  bool show_profiles();
++
++  bool show_last(uint options);
++};
++
++#endif /* SQL_PROFILE_H */
+diff -Nru a/sql/sql_select.cc b/sql/sql_select.cc
+--- a/sql/sql_select.cc	2005-11-14 03:09:22 -08:00
++++ b/sql/sql_select.cc	2005-11-14 03:09:22 -08:00
+@@ -540,6 +540,7 @@
+   if (thd->lex->orig_sql_command != SQLCOM_SHOW_STATUS)
+     thd->status_var.last_query_cost= 0.0;
+ 
++  THD_PROC_INFO(thd, "optimizing");
+   row_limit= ((select_distinct || order || group_list) ? HA_POS_ERROR :
+ 	      unit->select_limit_cnt);
+   /* select_limit is used to decide if we are likely to scan the whole table */
+@@ -627,14 +628,14 @@
+       if (res > 1)
+       {
+         DBUG_PRINT("error",("Error from opt_sum_query"));
+-	DBUG_RETURN(1);
++        DBUG_RETURN(1);
+       }
+       if (res < 0)
+       {
+         DBUG_PRINT("info",("No matching min/max row"));
+-	zero_result_cause= "No matching min/max row";
+-	error=0;
+-	DBUG_RETURN(0);
++        zero_result_cause= "No matching min/max row";
++        error=0;
++        DBUG_RETURN(0);
+       }
+       DBUG_PRINT("info",("Select tables optimized away"));
+       zero_result_cause= "Select tables optimized away";
+@@ -651,7 +652,7 @@
+   sort_by_table= get_sort_by_table(order, group_list, select_lex->leaf_tables);
+ 
+   /* Calculate how to do the join */
+-  thd->proc_info= "statistics";
++  THD_PROC_INFO(thd, "statistics");
+   if (make_join_statistics(this, select_lex->leaf_tables, conds, &keyuse) ||
+       thd->is_fatal_error)
+   {
+@@ -661,7 +662,7 @@
+ 
+   /* Remove distinct if only const tables */
+   select_distinct= select_distinct && (const_tables != tables);
+-  thd->proc_info= "preparing";
++  THD_PROC_INFO(thd, "preparing");
+   if (result->initialize_tables(this))
+   {
+     DBUG_PRINT("error",("Error: initialize_tables() failed"));
+@@ -971,8 +972,9 @@
+         join_tab[const_tables].type != JT_REF_OR_NULL &&
+         (order && simple_order || group_list && simple_group))
+     {
+-      if (add_ref_to_table_cond(thd,&join_tab[const_tables]))
++      if (add_ref_to_table_cond(thd,&join_tab[const_tables])) {
+         DBUG_RETURN(1);
++      }
+     }
+     
+     if (!(select_options & SELECT_BIG_RESULT) &&
+@@ -994,12 +996,12 @@
+     DBUG_RETURN(0);
+   }
+   having= 0;
+-
++  
+   /* Create a tmp table if distinct or if the sort is too complicated */
+   if (need_tmp)
+   {
+     DBUG_PRINT("info",("Creating tmp table"));
+-    thd->proc_info="Creating tmp table";
++    THD_PROC_INFO(thd, "creating temporary table");
+ 
+     init_items_ref_array();
+ 
+@@ -1016,7 +1018,9 @@
+ 			   (order == 0 || skip_sort_order) ? select_limit :
+ 			   HA_POS_ERROR,
+ 			   (char *) "")))
++		{
+       DBUG_RETURN(1);
++    }
+ 
+     /*
+       We don't have to store rows in temp table that doesn't match HAVING if:
+@@ -1036,28 +1040,35 @@
+     if (group_list && simple_group)
+     {
+       DBUG_PRINT("info",("Sorting for group"));
+-      thd->proc_info="Sorting for group";
++      THD_PROC_INFO(thd, "sorting for group");
+       if (create_sort_index(thd, this, group_list,
+ 			    HA_POS_ERROR, HA_POS_ERROR) ||
+ 	  alloc_group_fields(this, group_list) ||
+           make_sum_func_list(all_fields, fields_list, 1) ||
+           setup_sum_funcs(thd, sum_funcs))
+-	DBUG_RETURN(1);
++      {
++        DBUG_RETURN(1);
++      }
+       group_list=0;
+     }
+     else
+     {
+       if (make_sum_func_list(all_fields, fields_list, 0) ||
+           setup_sum_funcs(thd, sum_funcs))
+-	DBUG_RETURN(1);
++      {
++        DBUG_RETURN(1);
++      }
++
+       if (!group_list && ! exec_tmp_table1->distinct && order && simple_order)
+       {
+-	DBUG_PRINT("info",("Sorting for order"));
+-	thd->proc_info="Sorting for order";
+-	if (create_sort_index(thd, this, order,
++        DBUG_PRINT("info",("Sorting for order"));
++        THD_PROC_INFO(thd, "Sorting for order");
++        if (create_sort_index(thd, this, order,
+                               HA_POS_ERROR, HA_POS_ERROR))
+-	  DBUG_RETURN(1);
+-	order=0;
++        {
++          DBUG_RETURN(1);
++        }
++        order=0;
+       }
+     }
+     
+@@ -1174,6 +1185,7 @@
+   int      tmp_error;
+   DBUG_ENTER("JOIN::exec");
+ 
++  THD_PROC_INFO(thd, "executing");
+   error= 0;
+   if (procedure)
+   {
+@@ -1295,7 +1307,7 @@
+     curr_tmp_table= exec_tmp_table1;
+ 
+     /* Copy data to the temporary table */
+-    thd->proc_info= "Copying to tmp table";
++    THD_PROC_INFO(thd, "Copying to tmp table");
+     DBUG_PRINT("info", ("%s", thd->proc_info));
+     if (!curr_join->sort_and_group &&
+         curr_join->const_tables != curr_join->tables)
+@@ -1412,7 +1424,7 @@
+       }
+       if (curr_join->group_list)
+       {
+-	thd->proc_info= "Creating sort index";
++	THD_PROC_INFO(thd,  "Creating sort index");
+ 	if (curr_join->join_tab == join_tab && save_join_tab())
+ 	{
+ 	  DBUG_VOID_RETURN;
+@@ -1425,7 +1437,7 @@
+ 	}
+       }
+       
+-      thd->proc_info="Copying to group table";
++      THD_PROC_INFO(thd, "Copying to group table");
+       DBUG_PRINT("info", ("%s", thd->proc_info));
+       tmp_error= -1;
+       if (curr_join != this)
+@@ -1484,7 +1496,7 @@
+     curr_join->join_free();			/* Free quick selects */
+     if (curr_join->select_distinct && ! curr_join->group_list)
+     {
+-      thd->proc_info="Removing duplicates";
++      THD_PROC_INFO(thd, "Removing duplicates");
+       if (curr_join->tmp_having)
+ 	curr_join->tmp_having->update_used_tables();
+       if (remove_duplicates(curr_join, curr_tmp_table,
+@@ -1545,7 +1557,7 @@
+   if (curr_join->group_list || curr_join->order)
+   {
+     DBUG_PRINT("info",("Sorting for send_fields"));
+-    thd->proc_info="Sorting result";
++    THD_PROC_INFO(thd, "Sorting result");
+     /* If we have already done the group, add HAVING to sorted table */
+     if (curr_join->tmp_having && ! curr_join->group_list && 
+ 	! curr_join->sort_and_group)
+@@ -1678,7 +1690,7 @@
+   }
+   else
+   {
+-    thd->proc_info="Sending data";
++    THD_PROC_INFO(thd, "Sending data");
+     DBUG_PRINT("info", ("%s", thd->proc_info));
+     result->send_fields(*curr_fields_list,
+                         Protocol::SEND_NUM_ROWS | Protocol::SEND_EOF);
+@@ -1822,7 +1834,7 @@
+   {
+     if (!(join= new JOIN(thd, fields, select_options, result)))
+ 	DBUG_RETURN(TRUE);
+-    thd->proc_info="init";
++    THD_PROC_INFO(thd, "init");
+     thd->used_tables=0;                         // Updated by setup_fields
+     if (err= join->prepare(rref_pointer_array, tables, wild_num,
+                            conds, og_num, order, group, having, proc_param,
+@@ -1867,8 +1879,9 @@
+ err:
+   if (free_join)
+   {
+-    thd->proc_info="end";
++    THD_PROC_INFO(thd, "cleaning up");
+     err|= select_lex->cleanup();
++    THD_PROC_INFO(thd, "end");
+     DBUG_RETURN(err || thd->net.report_error);
+   }
+   DBUG_RETURN(join->error);
+@@ -8823,7 +8836,7 @@
+   DBUG_PRINT("enter",("table: %s",entry->alias));
+ 
+   save_proc_info=thd->proc_info;
+-  thd->proc_info="removing tmp table";
++  THD_PROC_INFO(thd, "removing tmp table");
+ 
+   if (entry->file)
+   {
+@@ -8842,7 +8855,7 @@
+   bitmap_lock_clear_bit(&temp_pool, entry->temp_pool_slot);
+ 
+   free_root(&own_root, MYF(0)); /* the table is allocated in its own root */
+-  thd->proc_info=save_proc_info;
++  THD_PROC_INFO(thd, save_proc_info);
+ 
+   DBUG_VOID_RETURN;
+ }
+@@ -8871,7 +8884,7 @@
+     DBUG_RETURN(1);				// End of memory
+ 
+   save_proc_info=thd->proc_info;
+-  thd->proc_info="converting HEAP to MyISAM";
++  THD_PROC_INFO(thd, "converting HEAP to MyISAM");
+ 
+   if (create_myisam_tmp_table(&new_table,param,
+ 			      thd->lex->select_lex.options | thd->options))
+@@ -8929,8 +8942,8 @@
+   table->s= &table->share_not_to_be_used;
+   table->file->change_table_ptr(table);
+   if (save_proc_info)
+-    thd->proc_info= (!strcmp(save_proc_info,"Copying to tmp table") ?
+-                     "Copying to tmp table on disk" : save_proc_info);
++    THD_PROC_INFO(thd, (!strcmp(save_proc_info,"Copying to tmp table") ?
++                     "Copying to tmp table on disk" : save_proc_info));
+   DBUG_RETURN(0);
+ 
+  err:
+@@ -8942,7 +8955,7 @@
+   new_table.file->delete_table(new_table.s->table_name);
+  err2:
+   delete new_table.file;
+-  thd->proc_info=save_proc_info;
++  THD_PROC_INFO(thd, save_proc_info);
+   DBUG_RETURN(1);
+ }
+ 
+diff -Nru a/sql/sql_table.cc b/sql/sql_table.cc
+--- a/sql/sql_table.cc	2005-11-14 03:09:22 -08:00
++++ b/sql/sql_table.cc	2005-11-14 03:09:22 -08:00
+@@ -1745,7 +1745,7 @@
+     }
+   }
+ 
+-  thd->proc_info="creating table";
++  THD_PROC_INFO(thd, "creating table");
+   create_info->table_existed= 0;		// Mark that table is created
+ 
+   if (thd->variables.sql_mode & MODE_NO_DIR_IN_CREATE)
+@@ -1786,7 +1786,7 @@
+   VOID(pthread_mutex_unlock(&LOCK_open));
+   start_waiting_global_read_lock(thd);
+   delete file;
+-  thd->proc_info="After create";
++  THD_PROC_INFO(thd, "After create");
+   DBUG_RETURN(error);
+ 
+ err:
+@@ -2943,7 +2943,7 @@
+     ALTER TABLE
+   */
+ 
+-  thd->proc_info="discard_or_import_tablespace";
++  THD_PROC_INFO(thd, "discard_or_import_tablespace");
+ 
+   discard= test(tablespace_op == DISCARD_TABLESPACE);
+ 
+@@ -2960,7 +2960,7 @@
+ 
+   error=table->file->discard_or_import_tablespace(discard);
+ 
+-  thd->proc_info="end";
++  THD_PROC_INFO(thd, "end");
+ 
+   if (error)
+     goto err;
+@@ -3386,7 +3386,7 @@
+ #endif
+   DBUG_ENTER("mysql_alter_table");
+ 
+-  thd->proc_info="init";
++  THD_PROC_INFO(thd, "init");
+   table_name=table_list->table_name;
+   alias= (lower_case_table_names == 2) ? table_list->alias : table_name;
+ 
+@@ -3884,14 +3884,14 @@
+   }
+   DBUG_PRINT("info", ("supports alter"));
+   
+-  thd->proc_info="setup";
++  THD_PROC_INFO(thd, "setup");
+   if (!(alter_info->flags & ~(ALTER_RENAME | ALTER_KEYS_ONOFF)) &&
+       !table->s->tmp_table) // no need to touch frm
+   {
+     error=0;
+     if (new_name != table_name || new_db != db)
+     {
+-      thd->proc_info="rename";
++      THD_PROC_INFO(thd, "rename");
+       VOID(pthread_mutex_lock(&LOCK_open));
+       /* Then do a 'simple' rename of the table */
+       error=0;
+@@ -4345,7 +4345,7 @@
+       {
+         DBUG_RETURN(TRUE);
+       }
+-      thd->proc_info="end";
++      THD_PROC_INFO(thd, "end");
+       write_bin_log(thd, FALSE);
+       send_ok(thd);
+       DBUG_RETURN(FALSE);
+@@ -4438,7 +4438,7 @@
+   /* We don't want update TIMESTAMP fields during ALTER TABLE. */
+   thd->count_cuted_fields= CHECK_FIELD_WARN;	// calc cuted fields
+   thd->cuted_fields=0L;
+-  thd->proc_info="copy to tmp table";
++  THD_PROC_INFO(thd, "copy to tmp table");
+   next_insert_id=thd->next_insert_id;		// Remember for logging
+   copied=deleted=0;
+   if (new_table && !new_table->s->is_view)
+@@ -4502,7 +4502,7 @@
+     from the cache, free all locks, close the old table and remove it.
+   */
+ 
+-  thd->proc_info="rename result table";
++  THD_PROC_INFO(thd, "rename result table");
+   my_snprintf(old_name, sizeof(old_name), "%s2-%lx-%lx", tmp_file_prefix,
+ 	      current_pid, thd->thread_id);
+   if (lower_case_table_names)
+@@ -4609,7 +4609,7 @@
+     VOID(pthread_cond_broadcast(&COND_refresh));
+     goto err;
+   }
+-  thd->proc_info="end";
++  THD_PROC_INFO(thd, "end");
+   write_bin_log(thd, TRUE);
+   VOID(pthread_cond_broadcast(&COND_refresh));
+   VOID(pthread_mutex_unlock(&LOCK_open));
+diff -Nru a/sql/sql_update.cc b/sql/sql_update.cc
+--- a/sql/sql_update.cc	2005-11-14 03:09:22 -08:00
++++ b/sql/sql_update.cc	2005-11-14 03:09:22 -08:00
+@@ -166,7 +166,7 @@
+        mysql_handle_derived(thd->lex, &mysql_derived_filling)))
+     DBUG_RETURN(1);
+ 
+-  thd->proc_info="init";
++  THD_PROC_INFO(thd, "init");
+   table= table_list->table;
+   table->file->info(HA_STATUS_VARIABLE | HA_STATUS_NO_LOCK);
+ 
+@@ -351,7 +351,7 @@
+       else
+         init_read_record_idx(&info, thd, table, 1, used_index);
+ 
+-      thd->proc_info="Searching rows for update";
++      THD_PROC_INFO(thd, "Searching rows for update");
+       uint tmp_limit= limit;
+ 
+       while (!(error=info.read_record(&info)) && !thd->killed)
+@@ -419,7 +419,7 @@
+   updated= found= 0;
+   thd->count_cuted_fields= CHECK_FIELD_WARN;		/* calc cuted fields */
+   thd->cuted_fields=0L;
+-  thd->proc_info="Updating";
++  THD_PROC_INFO(thd, "Updating");
+   query_id=thd->query_id;
+ 
+   transactional_table= table->file->has_transactions();
+@@ -586,7 +586,7 @@
+   end_read_record(&info);
+   free_io_cache(table);				// If ORDER BY
+   delete select;
+-  thd->proc_info= "end";
++  THD_PROC_INFO(thd, "end");
+   VOID(table->file->extra(HA_EXTRA_NO_IGNORE_DUP_KEY));
+ 
+   /*
+@@ -1024,7 +1024,7 @@
+ 
+   thd->count_cuted_fields= CHECK_FIELD_WARN;
+   thd->cuted_fields=0L;
+-  thd->proc_info="updating main table";
++  THD_PROC_INFO(thd, "updating main table");
+ 
+   tables_to_update= get_table_map(fields);
+ 
+@@ -1555,11 +1555,11 @@
+ bool multi_update::send_eof()
+ {
+   char buff[STRING_BUFFER_USUAL_SIZE];
+-  thd->proc_info="updating reference tables";
++  THD_PROC_INFO(thd, "updating reference tables");
+ 
+   /* Does updates for the last n - 1 tables, returns 0 if ok */
+   int local_error = (table_count) ? do_updates(0) : 0;
+-  thd->proc_info= "end";
++  THD_PROC_INFO(thd, "end");
+ 
+   /* We must invalidate the query cache before binlog writing and
+   ha_autocommit_... */
+diff -Nru a/sql/sql_yacc.yy b/sql/sql_yacc.yy
+--- a/sql/sql_yacc.yy	2005-11-14 03:09:22 -08:00
++++ b/sql/sql_yacc.yy	2005-11-14 03:09:22 -08:00
+@@ -154,6 +154,7 @@
+ %token  BIT_SYM
+ %token  BIT_XOR
+ %token  BLOB_SYM
++%token  BLOCK_SYM
+ %token  BOOLEAN_SYM
+ %token  BOOL_SYM
+ %token  BOTH
+@@ -193,10 +194,12 @@
+ %token  CONSISTENT_SYM
+ %token  CONSTRAINT
+ %token  CONTAINS_SYM
++%token  CONTEXT_SYM
+ %token  CONTINUE_SYM
+ %token  CONVERT_SYM
+ %token  CONVERT_TZ_SYM
+ %token  COUNT_SYM
++%token  CPU_SYM
+ %token  CREATE
+ %token  CROSS
+ %token  CUBE_SYM
+@@ -270,6 +273,7 @@
+ %token  EXTRACT_SYM
+ %token  FALSE_SYM
+ %token  FAST_SYM
++%token  FAULTS_SYM
+ %token  FETCH_SYM
+ %token  FIELD_FUNC
+ %token  FILE_SYM
+@@ -341,6 +345,8 @@
+ %token  INT_SYM
+ %token  INVOKER_SYM
+ %token  IN_SYM
++%token  IO_SYM
++%token  IPC_SYM
+ %token  IS
+ %token  ISOLATION
+ %token  ISSUER_SYM
+@@ -413,6 +419,7 @@
+ %token  MEDIUMINT
+ %token  MEDIUMTEXT
+ %token  MEDIUM_SYM
++%token  MEMORY_SYM
+ %token  MERGE_SYM
+ %token  MICROSECOND_SYM
+ %token  MIGRATE_SYM
+@@ -471,6 +478,7 @@
+ %token  OUTFILE
+ %token  OUT_SYM
+ %token  PACK_KEYS_SYM
++%token  PAGE_SYM
+ %token  PARSER_SYM
+ %token  PARTIAL
+ %token  PARTITION_SYM
+@@ -492,6 +500,8 @@
+ %token  PROCEDURE
+ %token  PROCESS
+ %token  PROCESSLIST_SYM
++%token  PROFILE_SYM
++%token  PROFILES_SYM
+ %token  PURGE
+ %token  QUARTER_SYM
+ %token  QUERY_SYM
+@@ -564,6 +574,7 @@
+ %token  SMALLINT
+ %token  SNAPSHOT_SYM
+ %token  SONAME_SYM
++%token  SOURCE_SYM
+ %token  SOUNDS_SYM
+ %token  SPATIAL_SYM
+ %token  SPECIFIC_SYM
+@@ -597,6 +608,8 @@
+ %token  SUM_SYM
+ %token  SUPER_SYM
+ %token  SUSPEND_SYM
++%token  SWAPS_SYM
++%token  SWITCHES_SYM
+ %token  SYSDATE
+ %token  TABLES
+ %token  TABLESPACE
+@@ -7019,6 +7032,35 @@
+ 	/* empty */
+ 	| TABLE_SYM;
+ 
++opt_profile_defs:
++  /* empty */
++  | profile_defs
++
++profile_defs:
++  profile_def
++  | profile_defs ',' profile_defs
++
++profile_def:
++  CPU_SYM
++    { Lex->profile_options|= PROFILE_CPU; }
++  | MEMORY_SYM
++    { Lex->profile_options|= PROFILE_MEMORY; }
++  | BLOCK_SYM IO_SYM
++    { Lex->profile_options|= PROFILE_BLOCK_IO; }
++  | CONTEXT_SYM SWITCHES_SYM
++    { Lex->profile_options|= PROFILE_CONTEXT; }
++  | PAGE_SYM FAULTS_SYM
++    { Lex->profile_options|= PROFILE_PAGE_FAULTS; }
++  | IPC_SYM
++    { Lex->profile_options|= PROFILE_IPC; }
++  | SWAPS_SYM
++    { Lex->profile_options|= PROFILE_SWAPS; }
++  | SOURCE_SYM
++    { Lex->profile_options|= PROFILE_SOURCE; }
++  | ALL
++    { Lex->profile_options|= PROFILE_ALL; }
++  ;
++
+ /* Show things */
+ 
+ show:	SHOW
+@@ -7157,6 +7199,10 @@
+           { Lex->sql_command = SQLCOM_SHOW_WARNS;}
+         | ERRORS opt_limit_clause_init
+           { Lex->sql_command = SQLCOM_SHOW_ERRORS;}
++        | PROFILES_SYM
++          { Lex->sql_command = SQLCOM_SHOW_PROFILES; }
++        | PROFILE_SYM opt_profile_defs opt_limit_clause_init
++          { Lex->sql_command = SQLCOM_SHOW_PROFILE; }
+         | opt_var_type STATUS_SYM wild_and_where
+           {
+             LEX *lex= Lex;
+@@ -8203,6 +8249,7 @@
+ 	| BERKELEY_DB_SYM	{}
+ 	| BINLOG_SYM		{}
+ 	| BIT_SYM		{}
++	| BLOCK_SYM {}
+ 	| BOOL_SYM		{}
+ 	| BOOLEAN_SYM		{}
+ 	| BTREE_SYM		{}
+@@ -8219,6 +8266,8 @@
+ 	| COMPRESSED_SYM	{}
+ 	| CONCURRENT		{}
+ 	| CONSISTENT_SYM	{}
++	| CONTEXT_SYM     {}
++	| CPU_SYM     {}
+ 	| CUBE_SYM		{}
+ 	| DATA_SYM		{}
+ 	| DATETIME		{}
+@@ -8241,6 +8290,7 @@
+         | EXPANSION_SYM         {}
+ 	| EXTENDED_SYM		{}
+ 	| FAST_SYM		{}
++	| FAULTS_SYM  {}
+ 	| FOUND_SYM		{}
+ 	| DISABLE_SYM		{}
+ 	| ENABLE_SYM		{}
+@@ -8265,6 +8315,8 @@
+ 	| ISSUER_SYM		{}
+ 	| INNOBASE_SYM		{}
+ 	| INSERT_METHOD		{}
++	| IO_SYM          {}
++	| IPC_SYM         {}
+ 	| RELAY_THREAD		{}
+ 	| LAST_SYM		{}
+ 	| LEAVES                {}
+@@ -8297,6 +8349,7 @@
+ 	| MAX_USER_CONNECTIONS_SYM {}
+ 	| MAX_VALUE_SYM         {}
+ 	| MEDIUM_SYM		{}
++	| MEMORY_SYM    {}
+ 	| MERGE_SYM		{}
+ 	| MICROSECOND_SYM	{}
+         | MIGRATE_SYM           {}
+@@ -8324,6 +8377,7 @@
+ 	| ONE_SHOT_SYM		{}
+         | ONE_SYM               {}
+ 	| PACK_KEYS_SYM		{}
++	| PAGE_SYM        {}
+ 	| PARTIAL		{}
+ 	| PARTITIONS_SYM	{}
+ 	| PASSWORD		{}
+@@ -8334,6 +8388,8 @@
+         | PRIVILEGES            {}
+ 	| PROCESS		{}
+ 	| PROCESSLIST_SYM	{}
++	| PROFILE_SYM {}
++	| PROFILES_SYM {}
+ 	| QUARTER_SYM		{}
+ 	| QUERY_SYM		{}
+ 	| QUICK			{}
+@@ -8368,6 +8424,7 @@
+ 	| SHUTDOWN		{}
+ 	| SNAPSHOT_SYM		{}
+ 	| SOUNDS_SYM		{}
++	| SOURCE_SYM    {}
+ 	| SQL_CACHE_SYM		{}
+ 	| SQL_BUFFER_RESULT	{}
+ 	| SQL_NO_CACHE_SYM	{}
+@@ -8381,6 +8438,8 @@
+ 	| SUBPARTITIONS_SYM	{}
+ 	| SUPER_SYM		{}
+         | SUSPEND_SYM           {}
++  | SWAPS_SYM           {}
++	| SWITCHES_SYM    {}
+         | TABLES                {}
+ 	| TABLESPACE		{}
+ 	| TEMPORARY		{}

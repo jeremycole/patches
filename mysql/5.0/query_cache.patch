@@ -1,0 +1,367 @@
+diff -aur mysql-5.0.37-orig/sql/lex.h mysql-5.0.37/sql/lex.h
+--- mysql-5.0.37-orig/sql/lex.h	2007-03-05 11:21:41.000000000 -0800
++++ mysql-5.0.37/sql/lex.h	2007-04-23 15:45:32.000000000 -0700
+@@ -457,6 +457,7 @@
+   { "SQL_BIG_RESULT",	SYM(SQL_BIG_RESULT)},
+   { "SQL_BUFFER_RESULT", SYM(SQL_BUFFER_RESULT)},
+   { "SQL_CACHE",        SYM(SQL_CACHE_SYM)},
++  { "SQL_CACHE_TTL",        SYM(SQL_CACHE_TTL_SYM)},
+   { "SQL_CALC_FOUND_ROWS", SYM(SQL_CALC_FOUND_ROWS)},
+   { "SQL_NO_CACHE",	SYM(SQL_NO_CACHE_SYM)},
+   { "SQL_SMALL_RESULT", SYM(SQL_SMALL_RESULT)},
+diff -aur mysql-5.0.37-orig/sql/mysqld.cc mysql-5.0.37/sql/mysqld.cc
+--- mysql-5.0.37-orig/sql/mysqld.cc	2007-03-05 11:21:11.000000000 -0800
++++ mysql-5.0.37/sql/mysqld.cc	2007-04-23 15:45:32.000000000 -0700
+@@ -4626,6 +4626,7 @@
+   OPT_OPEN_FILES_LIMIT,
+   OPT_PRELOAD_BUFFER_SIZE,
+   OPT_QUERY_CACHE_LIMIT, OPT_QUERY_CACHE_MIN_RES_UNIT, OPT_QUERY_CACHE_SIZE,
++	OPT_QUERY_CACHE_TTL,
+   OPT_QUERY_CACHE_TYPE, OPT_QUERY_CACHE_WLOCK_INVALIDATE, OPT_RECORD_BUFFER,
+   OPT_RECORD_RND_BUFFER, OPT_DIV_PRECINCREMENT, OPT_RELAY_LOG_SPACE_LIMIT,
+   OPT_RELAY_LOG_PURGE,
+@@ -5934,6 +5935,10 @@
+    (gptr*) &global_system_variables.query_cache_type,
+    (gptr*) &max_system_variables.query_cache_type,
+    0, GET_ULONG, REQUIRED_ARG, 1, 0, 2, 0, 1, 0},
++  {"query_cache_ttl", OPT_QUERY_CACHE_TTL,
++   "Time in seconds that queries live in the query cache when executed with SQL_QUERY_CACHE_TTL.",
++   (gptr*) &global_system_variables.query_cache_ttl, (gptr*) &max_system_variables.query_cache_ttl, 0, GET_ULONG,
++   REQUIRED_ARG, 12, 0, (longlong) ULONG_MAX, 0, 1, 0},
+   {"query_cache_wlock_invalidate", OPT_QUERY_CACHE_WLOCK_INVALIDATE,
+    "Invalidate queries in query cache on LOCK for write",
+    (gptr*) &global_system_variables.query_cache_wlock_invalidate,
+diff -aur mysql-5.0.37-orig/sql/mysql_priv.h mysql-5.0.37/sql/mysql_priv.h
+--- mysql-5.0.37-orig/sql/mysql_priv.h	2007-03-05 11:21:40.000000000 -0800
++++ mysql-5.0.37/sql/mysql_priv.h	2007-04-23 15:45:32.000000000 -0700
+@@ -640,6 +640,7 @@
+   MY_LOCALE *lc_time_names;
+ };
+ #define QUERY_CACHE_FLAGS_SIZE sizeof(Query_cache_query_flags)
++#define QUERY_CACHE_TTL_SIZE sizeof(time_t)
+ #include "sql_cache.h"
+ #define query_cache_store_query(A, B) query_cache.store_query(A, B)
+ #define query_cache_destroy() query_cache.destroy()
+@@ -1244,6 +1245,7 @@
+ extern ulong delayed_rows_in_use,delayed_insert_errors;
+ extern ulong slave_open_temp_tables;
+ extern ulong query_cache_size, query_cache_min_res_unit;
++extern ulong query_cache_ttl;
+ extern ulong slow_launch_threads, slow_launch_time;
+ extern ulong table_cache_size;
+ extern ulong max_connections,max_connect_errors, connect_timeout;
+diff -aur mysql-5.0.37-orig/sql/set_var.cc mysql-5.0.37/sql/set_var.cc
+--- mysql-5.0.37-orig/sql/set_var.cc	2007-03-05 11:21:24.000000000 -0800
++++ mysql-5.0.37/sql/set_var.cc	2007-04-23 15:45:32.000000000 -0700
+@@ -328,6 +328,7 @@
+ 					     &query_cache_size,
+ 					     fix_query_cache_size);
+ 
++
+ sys_var_thd_ulong	sys_range_alloc_block_size("range_alloc_block_size",
+ 						   &SV::range_alloc_block_size);
+ sys_var_thd_ulong	sys_query_alloc_block_size("query_alloc_block_size",
+@@ -350,9 +351,15 @@
+ sys_var_long_ptr        sys_query_cache_min_res_unit("query_cache_min_res_unit",
+ 						     &query_cache_min_res_unit,
+ 						     fix_query_cache_min_res_unit);
++
++sys_var_thd_ulong sys_query_cache_ttl("query_cache_ttl",
++							&SV::query_cache_ttl);
++
+ sys_var_thd_enum	sys_query_cache_type("query_cache_type",
+ 					     &SV::query_cache_type,
+ 					     &query_cache_type_typelib);
++
++
+ sys_var_thd_bool
+ sys_query_cache_wlock_invalidate("query_cache_wlock_invalidate",
+ 				 &SV::query_cache_wlock_invalidate);
+@@ -713,6 +720,7 @@
+ #ifdef HAVE_QUERY_CACHE
+   &sys_query_cache_limit,
+   &sys_query_cache_min_res_unit,
++	&sys_query_cache_ttl,
+   &sys_query_cache_type,
+   &sys_query_cache_wlock_invalidate,
+ #endif /* HAVE_QUERY_CACHE */
+@@ -1025,6 +1033,7 @@
+   {sys_query_cache_min_res_unit.name, (char*) &sys_query_cache_min_res_unit,
+    SHOW_SYS},
+   {sys_query_cache_size.name, (char*) &sys_query_cache_size,	    SHOW_SYS},
++	{sys_query_cache_ttl.name, (char*) &sys_query_cache_size, 		SHOW_SYS},
+   {sys_query_cache_type.name, (char*) &sys_query_cache_type,        SHOW_SYS},
+   {sys_query_cache_wlock_invalidate.name,
+    (char *) &sys_query_cache_wlock_invalidate, SHOW_SYS},
+diff -aur mysql-5.0.37-orig/sql/sql_cache.cc mysql-5.0.37/sql/sql_cache.cc
+--- mysql-5.0.37-orig/sql/sql_cache.cc	2007-03-05 11:21:40.000000000 -0800
++++ mysql-5.0.37/sql/sql_cache.cc	2007-04-23 15:45:32.000000000 -0700
+@@ -629,9 +629,17 @@
+ 
+   Query_cache_block *query_block = ((Query_cache_block*)
+ 				    net->query_cache_query);
++
++	DBUG_PRINT("query_cache_insert", ("We make it to the query block block"));
+   if (query_block)
+   {
+     Query_cache_query *header = query_block->query();
++
++    header->ctime = time(NULL);
++
++    DBUG_PRINT("query_cache_insert",
++      ("Query cache ctime (%d)", header->ctime));
++
+     Query_cache_block *result = header->result();
+ 
+     DUMP(&query_cache);
+@@ -661,7 +669,10 @@
+     DBUG_EXECUTE("check_querycache",query_cache.check_integrity(0););
+   }
+   else
++	{
+     STRUCT_UNLOCK(&query_cache.structure_guard_mutex);
++		DBUG_PRINT("query_cache_insert", ("No query block found"));
++	}	
+   DBUG_VOID_RETURN;
+ }
+ 
+@@ -723,6 +734,7 @@
+                query_cache.flush_in_progress))
+     goto end;
+ 
++
+   query_block= ((Query_cache_block*) thd->net.query_cache_query);
+   if (query_block)
+   {
+@@ -733,6 +745,18 @@
+     Query_cache_block *last_result_block= header->result()->prev;
+     ulong allign_size= ALIGN_SIZE(last_result_block->used);
+     ulong len= max(query_cache.min_allocation_unit, allign_size);
++
++		if (thd->lex->cache_using_ttl)
++		{
++			DBUG_PRINT("query_cache_end_of_result", ("The thd query cache ttl is (%d)", thd->variables.query_cache_ttl));
++			header->ttl = thd->variables.query_cache_ttl;
++		}	
++		else
++		{
++			DBUG_PRINT("query_cache_end_of-result", ("Query cache ttl is set to zero, NOT CACHING QUERY"));
++			header->ttl = 0;
++		}	
++		
+     if (last_result_block->length >= query_cache.min_allocation_unit + len)
+       query_cache.split_block(last_result_block,len);
+ 
+@@ -915,13 +939,14 @@
+     {
+       DBUG_PRINT("qcache", ("No active database"));
+     }
++
+     tot_length= thd->query_length + thd->db_length + 1 +
+-      QUERY_CACHE_FLAGS_SIZE;
++      QUERY_CACHE_FLAGS_SIZE + QUERY_CACHE_TTL_SIZE;
+     /*
+       We should only copy structure (don't use it location directly)
+       because of alignment issue
+     */
+-    memcpy((void *)(thd->query + (tot_length - QUERY_CACHE_FLAGS_SIZE)),
++    memcpy((void *)(thd->query + (tot_length - QUERY_CACHE_FLAGS_SIZE - QUERY_CACHE_TTL_SIZE)),
+ 	   &flags, QUERY_CACHE_FLAGS_SIZE);
+ 
+     /* Check if another thread is processing the same query? */
+@@ -1079,7 +1104,7 @@
+ 
+   Query_cache_block *query_block;
+ 
+-  tot_length= query_length + thd->db_length + 1 + QUERY_CACHE_FLAGS_SIZE;
++  tot_length= query_length + thd->db_length + 1 + QUERY_CACHE_FLAGS_SIZE + QUERY_CACHE_TTL_SIZE;
+   if (thd->db_length)
+   {
+     memcpy(sql+query_length+1, thd->db, thd->db_length);
+@@ -1128,8 +1153,14 @@
+                           flags.sql_mode,
+                           flags.max_sort_length,
+                           flags.group_concat_max_len));
+-  memcpy((void *)(sql + (tot_length - QUERY_CACHE_FLAGS_SIZE)),
++  memcpy((void *)(sql + (tot_length - QUERY_CACHE_FLAGS_SIZE - QUERY_CACHE_TTL_SIZE)),
+ 	 &flags, QUERY_CACHE_FLAGS_SIZE);
++
++  memcpy((void *)(sql + (tot_length - QUERY_CACHE_TTL_SIZE)),
++	 &thd->variables.query_cache_ttl, QUERY_CACHE_TTL_SIZE);
++
++	DBUG_PRINT("qcache", ("appending ttl of (%d)", thd->variables.query_cache_ttl));
++	 
+   query_block = (Query_cache_block *)  hash_search(&queries, (byte*) sql,
+ 						   tot_length);
+   /* Quick abort on unlocked data */
+@@ -1146,6 +1177,15 @@
+   BLOCK_LOCK_RD(query_block);
+ 
+   query = query_block->query();
++
++	if (query->ttl > 0 && query->ctime + query->ttl < time(NULL))
++	{
++		BLOCK_UNLOCK_RD(query_block);
++		STRUCT_UNLOCK(&structure_guard_mutex);
++		DBUG_RETURN(-1);
++	}
++
++
+   result_block= first_result_block= query->result();
+ 
+   if (result_block == 0 || result_block->type != Query_cache_block::RESULT)
+@@ -2284,6 +2324,7 @@
+ 
+ void Query_cache::invalidate_table(TABLE_LIST *table_list)
+ {
++	DBUG_ENTER("Query_cache::invalidate_table (table_list)");
+   if (table_list->table != 0)
+     invalidate_table(table_list->table);	// Table is open
+   else
+@@ -2299,30 +2340,59 @@
+ 	 hash_search(&tables,(byte*) key,key_length)))
+       invalidate_table(table_block);
+   }
++
++	DBUG_VOID_RETURN;
+ }
+ 
+ void Query_cache::invalidate_table(TABLE *table)
+ {
++	DBUG_ENTER("Query_cache::invalidate_table (table)");
+   invalidate_table((byte*) table->s->table_cache_key, table->s->key_length);
++	DBUG_VOID_RETURN;
+ }
+ 
+ void Query_cache::invalidate_table(byte * key, uint32  key_length)
+ {
+   Query_cache_block *table_block;
++
++	DBUG_ENTER("Query_cache::invalidate_table (key, key_length)");
++	
+   if ((table_block = ((Query_cache_block*)
+ 		      hash_search(&tables, key, key_length))))
+     invalidate_table(table_block);
++
++	DBUG_VOID_RETURN;	
+ }
+ 
+ void Query_cache::invalidate_table(Query_cache_block *table_block)
+ {
+   Query_cache_block_table *list_root =	table_block->table(0);
++	time_t t;
++
++	DBUG_ENTER("Query_cache::invalidate_table (table_block)");
++
++	t = time(NULL);
++	
+   while (list_root->next != list_root)
+   {
+     Query_cache_block *query_block = list_root->next->block();
+     BLOCK_LOCK_WR(query_block);
+-    free_query(query_block);
++    Query_cache_query *query = query_block->query();
++		DBUG_PRINT("Query_cache::invalidate", ("Looping in list_root->next != list_root"));
++
++    if (query->ttl > 0 && query->ctime + query->ttl > t)
++		{
++			DBUG_PRINT("Query_cache::invalidate_table", ("Not purging query cache---------------"));
++			BLOCK_UNLOCK_WR(query_block);
++			break;
++		}
++
++		DBUG_PRINT("Query_cache::invalidate_table", ("Freeing query block-------------"));
++
++   	free_query(query_block);
+   }
++
++	DBUG_VOID_RETURN;
+ }
+ 
+ 
+@@ -3667,7 +3737,7 @@
+     {
+       uint len;
+       char *str = (char*) query_cache_query_get_key((byte*) block, &len, 0);
+-      len-= QUERY_CACHE_FLAGS_SIZE;		  // Point at flags
++      len-= QUERY_CACHE_FLAGS_SIZE + QUERY_CACHE_TTL_SIZE;		  // Point at flags
+       Query_cache_query_flags flags;
+       memcpy(&flags, str+len, QUERY_CACHE_FLAGS_SIZE);
+       str[len]= 0; // make zero ending DB name
+diff -aur mysql-5.0.37-orig/sql/sql_cache.h mysql-5.0.37/sql/sql_cache.h
+--- mysql-5.0.37-orig/sql/sql_cache.h	2007-03-05 11:21:23.000000000 -0800
++++ mysql-5.0.37/sql/sql_cache.h	2007-04-23 15:45:32.000000000 -0700
+@@ -112,6 +112,8 @@
+   Query_cache_block *res;
+   NET *wri;
+   ulong len;
++	uint ttl;
++	time_t ctime;
+   uint8 tbls_type;
+   unsigned int last_pkt_nr;
+ 
+diff -aur mysql-5.0.37-orig/sql/sql_class.h mysql-5.0.37/sql/sql_class.h
+--- mysql-5.0.37-orig/sql/sql_class.h	2007-03-05 11:21:40.000000000 -0800
++++ mysql-5.0.37/sql/sql_class.h	2007-04-23 15:45:32.000000000 -0700
+@@ -523,6 +523,7 @@
+   ulong preload_buff_size;
+   ulong profiling_history_size;
+   ulong query_cache_type;
++	ulong query_cache_ttl;
+   ulong read_buff_size;
+   ulong read_rnd_buff_size;
+   ulong div_precincrement;
+diff -aur mysql-5.0.37-orig/sql/sql_lex.h mysql-5.0.37/sql/sql_lex.h
+--- mysql-5.0.37-orig/sql/sql_lex.h	2007-03-05 11:21:05.000000000 -0800
++++ mysql-5.0.37/sql/sql_lex.h	2007-04-23 15:45:32.000000000 -0700
+@@ -320,7 +320,7 @@
+     In sql_cache we store SQL_CACHE flag as specified by user to be
+     able to restore SELECT statement from internal structures.
+   */
+-  enum e_sql_cache { SQL_CACHE_UNSPECIFIED, SQL_NO_CACHE, SQL_CACHE };
++  enum e_sql_cache { SQL_CACHE_UNSPECIFIED, SQL_NO_CACHE, SQL_CACHE, SQL_CACHE_TTL };
+   e_sql_cache sql_cache;
+ 
+   /*
+@@ -1039,6 +1039,7 @@
+   */
+   bool stmt_prepare_mode;
+   bool safe_to_cache_query;
++	bool cache_using_ttl;
+   bool subqueries, ignore;
+   st_parsing_options parsing_options;
+   Alter_info alter_info;
+diff -aur mysql-5.0.37-orig/sql/sql_parse.cc mysql-5.0.37/sql/sql_parse.cc
+--- mysql-5.0.37-orig/sql/sql_parse.cc	2007-03-05 11:21:40.000000000 -0800
++++ mysql-5.0.37/sql/sql_parse.cc	2007-04-23 15:45:32.000000000 -0700
+@@ -1306,7 +1306,7 @@
+     buff[length]=0;
+     thd->query_length=length;
+     thd->query= thd->memdup_w_gap(buff, length+1, 
+-				  thd->db_length+1+QUERY_CACHE_FLAGS_SIZE);
++				  thd->db_length+1+QUERY_CACHE_FLAGS_SIZE + QUERY_CACHE_TTL_SIZE);
+     thd->query[length] = '\0';
+     /*
+       We don't need to obtain LOCK_thread_count here because in bootstrap
+diff -aur mysql-5.0.37-orig/sql/sql_yacc.yy mysql-5.0.37/sql/sql_yacc.yy
+--- mysql-5.0.37-orig/sql/sql_yacc.yy	2007-03-05 11:21:23.000000000 -0800
++++ mysql-5.0.37/sql/sql_yacc.yy	2007-04-23 15:45:32.000000000 -0700
+@@ -781,6 +781,7 @@
+ %token  SQL_CACHE_SYM
+ %token  SQL_CALC_FOUND_ROWS
+ %token  SQL_NO_CACHE_SYM
++%token  SQL_CACHE_TTL_SYM
+ %token  SQL_SMALL_RESULT
+ %token  SQL_SYM
+ %token  SQL_THREAD
+@@ -4265,6 +4266,10 @@
+               Lex->select_lex.sql_cache= SELECT_LEX::SQL_CACHE;
+             }
+ 	  }
++	| SQL_CACHE_TTL_SYM
++		{
++			Lex->cache_using_ttl=1;
++		}	
+ 	| ALL		    { Select->options|= SELECT_ALL; }
+ 	;
+ 

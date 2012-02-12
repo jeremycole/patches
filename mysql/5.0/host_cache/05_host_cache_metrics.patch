@@ -1,0 +1,277 @@
+diff -Nur -x bdb mysql-5.0.25-nightly-20060823.host_cache04/client/mysql_priv.h mysql-5.0.25-nightly-20060823.host_cache05/client/mysql_priv.h
+--- mysql-5.0.25-nightly-20060823.host_cache04/client/mysql_priv.h	2006-09-25 21:38:21.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache05/client/mysql_priv.h	2006-09-26 14:03:53.000000000 -0700
+@@ -1481,10 +1481,13 @@
+ {
+ public:
+   uint32 ip;
+-  uint	 errors;
++  uint32 errors;
++  uint32 hits;
+   char	 *hostname;
+ };
+ extern hash_filo *hostname_cache;
++extern hash_filo_metrics hostname_cache_metrics;
++
+ struct in_addr;
+ my_string ip_to_hostname(struct in_addr *in,uint *errors);
+ void hostname_cache_inc_errors(struct in_addr *in);
+diff -Nur -x bdb mysql-5.0.25-nightly-20060823.host_cache04/sql/hash_filo.cc mysql-5.0.25-nightly-20060823.host_cache05/sql/hash_filo.cc
+--- mysql-5.0.25-nightly-20060823.host_cache04/sql/hash_filo.cc	2006-09-25 21:35:50.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache05/sql/hash_filo.cc	2006-09-26 15:01:55.000000000 -0700
+@@ -27,12 +27,22 @@
+ #include "mysql_priv.h"
+ #include "hash_filo.h"
+ 
++hash_filo_metrics::hash_filo_metrics()
++{
++  reset();
++}
++
++void hash_filo_metrics::reset()
++{
++  hits= misses= inserts= prunes= 0;
++}
++
+ hash_filo::hash_filo(uint size_arg, uint key_offset_arg, uint key_length_arg,
+           hash_get_key get_key_arg, hash_free_key free_element_arg,
+           CHARSET_INFO *hash_charset_arg)
+   :size(size_arg), key_offset(key_offset_arg), key_length(key_length_arg),
+    get_key(get_key_arg), free_element(free_element_arg), init(0),
+-   hash_charset(hash_charset_arg)
++   hash_charset(hash_charset_arg), metrics(NULL)
+ {
+   bzero((char*) &cache, sizeof(cache));
+ }
+@@ -46,6 +56,11 @@
+     pthread_mutex_destroy(&lock);
+   }
+ }
++
++void hash_filo::set_metrics(hash_filo_metrics *in_metrics)
++{
++  metrics= in_metrics;
++}
+   
+ void hash_filo::clear(bool locked)
+ {
+@@ -59,9 +74,15 @@
+   (void) hash_free(&cache);
+   (void) hash_init(&cache, hash_charset, size, key_offset, 
+                    key_length, get_key, free_element, 0);
++  if(metrics) metrics->reset();
+   if (!locked)
+     (void) pthread_mutex_unlock(&lock);
+   newest_element_p= oldest_element_p= NULL;
++  if(metrics)
++  {
++    metrics->used= 0;
++    metrics->free= size;
++  }
+ }
+ 
+ void hash_filo::resize(uint new_size)
+@@ -79,6 +100,7 @@
+                                                              length);
+   if (entry)
+   {						// Found; link it first
++    if(metrics) statistic_increment(metrics->hits, &metrics->lock);
+     if (entry != newest_element_p)
+     {						// Relink used-chain
+       if (entry == oldest_element_p)
+@@ -91,6 +113,8 @@
+         newest_element_p->newer_element_p= entry;
+       newest_element_p= entry;
+     }
++  } else {
++    if(metrics) statistic_increment(metrics->misses, &metrics->lock);
+   }
+   return entry;
+ }
+@@ -114,6 +138,7 @@
+       newest_element_p = NULL;
+ 
+     hash_delete(&cache, (byte*) tmp);
++    if(metrics) statistic_increment(metrics->prunes, &metrics->lock);
+   }
+     
+   if (my_hash_insert(&cache, (byte*) entry))
+@@ -122,11 +147,19 @@
+       (*free_element)(entry);		// This should never happen
+     return 1;
+   }
++  if(metrics) statistic_increment(metrics->inserts, &metrics->lock);
+ 
+   if ((entry->older_element_p= newest_element_p))
+     newest_element_p->newer_element_p= entry;
+   else
+     oldest_element_p= entry;
+   newest_element_p= entry;
++
++  if(metrics)
++  {
++    metrics->used= cache.records;
++    metrics->free= size - cache.records;
++  }
++
+   return 0;
+ }
+diff -Nur -x bdb mysql-5.0.25-nightly-20060823.host_cache04/sql/hash_filo.h mysql-5.0.25-nightly-20060823.host_cache05/sql/hash_filo.h
+--- mysql-5.0.25-nightly-20060823.host_cache04/sql/hash_filo.h	2006-09-25 21:35:50.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache05/sql/hash_filo.h	2006-09-26 14:51:19.000000000 -0700
+@@ -37,6 +37,23 @@
+   friend class hash_filo;
+ };
+ 
++class hash_filo_metrics
++{
++ public:
++  hash_filo_metrics();
++  void reset();
++
++  uint32 hits;
++  uint32 misses;
++  uint32 inserts;
++  uint32 prunes;
++
++  uint32 used, free;
++
++  pthread_mutex_t lock;
++
++  friend class hash_filo;
++};
+ 
+ class hash_filo
+ {
+@@ -47,6 +64,7 @@
+   bool init;
+   CHARSET_INFO *hash_charset;
+ 
++  hash_filo_metrics *metrics;
+   hash_filo_element *newest_element_p, *oldest_element_p;
+   
+ public:
+@@ -58,6 +76,8 @@
+             CHARSET_INFO *hash_charset_arg);
+   ~hash_filo();
+ 
++  void set_metrics(hash_filo_metrics *in_metrics);
++
+   hash_filo_element *newest_element() { return newest_element_p; }
+   hash_filo_element *oldest_element() { return oldest_element_p; }
+ 
+diff -Nur -x bdb mysql-5.0.25-nightly-20060823.host_cache04/sql/hostname.cc mysql-5.0.25-nightly-20060823.host_cache05/sql/hostname.cc
+--- mysql-5.0.25-nightly-20060823.host_cache04/sql/hostname.cc	2006-09-26 11:07:19.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache05/sql/hostname.cc	2006-09-26 16:02:11.000000000 -0700
+@@ -40,6 +40,7 @@
+ 
+ 
+ hash_filo *hostname_cache;
++hash_filo_metrics hostname_cache_metrics;
+ 
+ /*
+   A simple inline function to return the hash key for a given entry.
+@@ -82,6 +83,7 @@
+                                       &my_charset_latin1)))
+     DBUG_RETURN(1);
+   hostname_cache->clear();
++  hostname_cache->set_metrics(&hostname_cache_metrics);
+   DBUG_RETURN(0);
+ }
+ 
+@@ -272,6 +274,7 @@
+       else
+         name=my_strdup(entry->hostname,MYF(0));
+       *errors= entry->errors;
++      entry->hits++;
+       VOID(pthread_mutex_unlock(&hostname_cache->lock));
+       DBUG_RETURN(name);
+     }
+@@ -281,7 +284,7 @@
+   /*
+     The IP didn't exist in the hostname cache, we need to resolve it.
+   */
+-  
++
+   struct hostent *reverse, *forward;
+   struct hostent he_reverse, he_forward;
+   char buf_reverse[GETHOSTBYADDR_BUFF_SIZE];
+@@ -308,9 +311,7 @@
+   if (!reverse->h_name[0])
+   {
+     DBUG_PRINT("error", ("Got an empty hostname from reverse lookup"));
+-    hostname_cache_add_deny(in);
+-    my_gethostbyaddr_r_free();
+-    DBUG_RETURN(0);				// Don't allow empty hostnames
++    goto cache_failure_and_return;
+   }
+   
+   /*
+@@ -370,7 +371,12 @@
+   {
+     if (*(uint32*)(forward->h_addr_list)[i] == in->s_addr)
+     {
+-      hostname_cache_add(in, name);
++      if(likely(host_cache_size > 0))
++      {
++        hostname_cache_add(in, name);
++        /* hostname_cache_add calls ::search, which will increment misses */
++        statistic_decrement(hostname_cache_metrics.misses, &hostname_cache_metrics.lock);
++      }
+       my_gethostbyname_r_free();
+       DBUG_RETURN(name);
+     }
+diff -Nur -x bdb mysql-5.0.25-nightly-20060823.host_cache04/sql/mysqld.cc mysql-5.0.25-nightly-20060823.host_cache05/sql/mysqld.cc
+--- mysql-5.0.25-nightly-20060823.host_cache04/sql/mysqld.cc	2006-09-25 21:50:34.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache05/sql/mysqld.cc	2006-09-26 14:38:34.000000000 -0700
+@@ -6137,6 +6137,12 @@
+   {"Handler_savepoint_rollback",(char*) offsetof(STATUS_VAR, ha_savepoint_rollback_count), SHOW_LONG_STATUS},
+   {"Handler_update",           (char*) offsetof(STATUS_VAR, ha_update_count), SHOW_LONG_STATUS},
+   {"Handler_write",            (char*) offsetof(STATUS_VAR, ha_write_count), SHOW_LONG_STATUS},
++  {"Host_cache_free",          (char*) &hostname_cache_metrics.free, SHOW_LONG},
++  {"Host_cache_hits",          (char*) &hostname_cache_metrics.hits, SHOW_LONG},
++  {"Host_cache_inserts",       (char*) &hostname_cache_metrics.inserts, SHOW_LONG},
++  {"Host_cache_misses",        (char*) &hostname_cache_metrics.misses, SHOW_LONG},
++  {"Host_cache_prunes",        (char*) &hostname_cache_metrics.prunes, SHOW_LONG},
++  {"Host_cache_used",          (char*) &hostname_cache_metrics.used, SHOW_LONG},
+ #ifdef HAVE_INNOBASE_DB
+   {"Innodb_",                  (char*) &innodb_status_variables, SHOW_VARS},
+ #endif /*HAVE_INNOBASE_DB*/
+diff -Nur -x bdb mysql-5.0.25-nightly-20060823.host_cache04/sql/mysql_priv.h mysql-5.0.25-nightly-20060823.host_cache05/sql/mysql_priv.h
+--- mysql-5.0.25-nightly-20060823.host_cache04/sql/mysql_priv.h	2006-09-25 21:38:21.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache05/sql/mysql_priv.h	2006-09-26 14:03:53.000000000 -0700
+@@ -1481,10 +1481,13 @@
+ {
+ public:
+   uint32 ip;
+-  uint	 errors;
++  uint32 errors;
++  uint32 hits;
+   char	 *hostname;
+ };
+ extern hash_filo *hostname_cache;
++extern hash_filo_metrics hostname_cache_metrics;
++
+ struct in_addr;
+ my_string ip_to_hostname(struct in_addr *in,uint *errors);
+ void hostname_cache_inc_errors(struct in_addr *in);
+diff -Nur -x bdb mysql-5.0.25-nightly-20060823.host_cache04/sql/sql_show.cc mysql-5.0.25-nightly-20060823.host_cache05/sql/sql_show.cc
+--- mysql-5.0.25-nightly-20060823.host_cache04/sql/sql_show.cc	2006-09-26 10:47:41.000000000 -0700
++++ mysql-5.0.25-nightly-20060823.host_cache05/sql/sql_show.cc	2006-09-26 12:44:28.000000000 -0700
+@@ -63,6 +63,8 @@
+   item->maybe_null= 1;
+   field_list.push_back(new Item_return_int("Errors", 10, 
+                                            MYSQL_TYPE_LONG));
++  field_list.push_back(new Item_return_int("Hits", 10, 
++                                           MYSQL_TYPE_LONG));
+ 
+   if (protocol->send_fields(&field_list,
+                             Protocol::SEND_NUM_ROWS | Protocol::SEND_EOF))
+@@ -84,6 +86,7 @@
+     else
+       protocol->store_null();
+     protocol->store((uint)cur->errors);
++    protocol->store((uint)cur->hits);
+     if(protocol->write())
+       DBUG_RETURN(TRUE);
+   }

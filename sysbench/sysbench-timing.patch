@@ -1,0 +1,18 @@
+--- sysbench-0.4.7.orig/sysbench/tests/fileio/sb_fileio.c	2006-01-31 03:15:49.000000000 -0800
++++ sysbench-0.4.7/sysbench/tests/fileio/sb_fileio.c	2006-05-27 02:33:49.000000000 -0700
+@@ -589,7 +589,6 @@
+                   fd, (long long)file_req->pos);
+         return 1;
+       }
+-      LOG_EVENT_STOP(msg, thread_id);
+ 
+       /* Check if we have to fsync each write operation */
+       if (file_fsync_all)
+@@ -600,6 +599,7 @@
+           return 1;
+         }
+       }
++      LOG_EVENT_STOP(msg, thread_id);
+ 
+       SB_THREAD_MUTEX_LOCK();
+       write_ops++;

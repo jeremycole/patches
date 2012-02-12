@@ -1,0 +1,275 @@
+diff -urN 6.0.4-orig/include/mysql_com.h 6.0.4-flush-logs-patched/include/mysql_com.h
+--- 6.0.4-orig/include/mysql_com.h	2008-02-13 04:06:17.000000000 -0800
++++ 6.0.4-flush-logs-patched/include/mysql_com.h	2008-10-25 11:21:44.000000000 -0700
+@@ -125,6 +125,12 @@
+ 					   thread */
+ #define REFRESH_MASTER          128     /* Remove all bin logs in the index
+ 					   and truncate the index */
++#define REFRESH_ERROR_LOG       256 /* Rotate only the erorr log */
++#define REFRESH_ENGINE_LOG      512 /* Flush all storage engine logs */
++#define REFRESH_BINARY_LOG     1024 /* Flush the binary log */
++#define REFRESH_RELAY_LOG      2048 /* Flush the relay log */
++#define REFRESH_GENERAL_LOG    4096 /* Flush the general log */
++#define REFRESH_SLOW_LOG       8192 /* Flush the slow query log */
+ 
+ /* The following can't be set with mysql_refresh() */
+ #define REFRESH_READ_LOCK	16384	/* Lock tables for read */
+diff -urN 6.0.4-orig/mysql-test/r/parser.result 6.0.4-flush-logs-patched/mysql-test/r/parser.result
+--- 6.0.4-orig/mysql-test/r/parser.result	2008-02-13 04:36:17.000000000 -0800
++++ 6.0.4-flush-logs-patched/mysql-test/r/parser.result	2008-10-25 11:21:44.000000000 -0700
+@@ -361,10 +361,6 @@
+ ERROR 42000: Incorrect parameter count in the call to native function 'locate'
+ select locate(1, 2, 3, 4);
+ ERROR 42000: Incorrect parameter count in the call to native function 'locate'
+-select log();
+-ERROR 42000: Incorrect parameter count in the call to native function 'log'
+-select log(1, 2, 3);
+-ERROR 42000: Incorrect parameter count in the call to native function 'log'
+ select make_set();
+ ERROR 42000: Incorrect parameter count in the call to native function 'make_set'
+ select make_set(1);
+diff -urN 6.0.4-orig/mysql-test/t/parser.test 6.0.4-flush-logs-patched/mysql-test/t/parser.test
+--- 6.0.4-orig/mysql-test/t/parser.test	2008-02-13 04:36:17.000000000 -0800
++++ 6.0.4-flush-logs-patched/mysql-test/t/parser.test	2008-10-25 11:21:44.000000000 -0700
+@@ -492,11 +492,6 @@
+ select locate(1, 2, 3, 4);
+ 
+ -- error ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT
+-select log();
+--- error ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT
+-select log(1, 2, 3);
+-
+--- error ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT
+ select make_set();
+ -- error ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT
+ select make_set(1);
+diff -urN 6.0.4-orig/sql/lex.h 6.0.4-flush-logs-patched/sql/lex.h
+--- 6.0.4-orig/sql/lex.h	2008-02-13 04:06:54.000000000 -0800
++++ 6.0.4-flush-logs-patched/sql/lex.h	2008-10-25 11:21:44.000000000 -0700
+@@ -183,6 +183,7 @@
+   { "ENGINE",		SYM(ENGINE_SYM)},
+   { "ENGINES",		SYM(ENGINES_SYM)},
+   { "ENUM",		SYM(ENUM)},
++  { "ERROR",  SYM(ERROR_SYM)},
+   { "ERRORS",		SYM(ERRORS)},
+   { "ESCAPE",		SYM(ESCAPE_SYM)},
+   { "ESCAPED",		SYM(ESCAPED)},
+@@ -218,6 +219,7 @@
+   { "FULL",		SYM(FULL)},
+   { "FULLTEXT",		SYM(FULLTEXT_SYM)},
+   { "FUNCTION",		SYM(FUNCTION_SYM)},
++  { "GENERAL",    SYM(GENERAL)},
+   { "GEOMETRY",		SYM(GEOMETRY_SYM)},
+   { "GEOMETRYCOLLECTION",SYM(GEOMETRYCOLLECTION)},
+   { "GET_FORMAT",       SYM(GET_FORMAT)},
+@@ -292,6 +294,7 @@
+   { "LOCK",		SYM(LOCK_SYM)},
+   { "LOCKS",		SYM(LOCKS_SYM)},
+   { "LOGFILE",		SYM(LOGFILE_SYM)},
++  { "LOG",   SYM(LOG_SYM)},
+   { "LOGS",		SYM(LOGS_SYM)},
+   { "LONG",		SYM(LONG_SYM)},
+   { "LONGBLOB",		SYM(LONGBLOB)},
+@@ -420,6 +423,7 @@
+   { "REDUNDANT",	SYM(REDUNDANT_SYM)},
+   { "REFERENCES",	SYM(REFERENCES)},
+   { "REGEXP",		SYM(REGEXP)},
++  { "RELAY",    SYM(RELAY)},
+   { "RELAY_LOG_FILE",   SYM(RELAY_LOG_FILE_SYM)},
+   { "RELAY_LOG_POS",    SYM(RELAY_LOG_POS_SYM)},
+   { "RELAY_THREAD",     SYM(RELAY_THREAD)},
+@@ -472,6 +476,7 @@
+   { "SIGNED",		SYM(SIGNED_SYM)},
+   { "SIMPLE",		SYM(SIMPLE_SYM)},
+   { "SLAVE",            SYM(SLAVE)},
++  { "SLOW",   SYM(SLOW)},
+   { "SNAPSHOT",         SYM(SNAPSHOT_SYM)},
+   { "SMALLINT",		SYM(SMALLINT)},
+   { "SOCKET",		SYM(SOCKET_SYM)},
+diff -urN 6.0.4-orig/sql/sql_parse.cc 6.0.4-flush-logs-patched/sql/sql_parse.cc
+--- 6.0.4-orig/sql/sql_parse.cc	2008-02-13 04:06:53.000000000 -0800
++++ 6.0.4-flush-logs-patched/sql/sql_parse.cc	2008-10-25 11:21:44.000000000 -0700
+@@ -6264,6 +6264,57 @@
+     reset_mqh((LEX_USER *)NULL, TRUE);
+   }
+ #endif
++  if (options & REFRESH_ERROR_LOG)
++  {
++    if (flush_error_log())
++      result= 1;
++  }
++
++  if (options & REFRESH_SLOW_LOG)
++  {
++    MYSQL_QUERY_LOG *mysql_slow_log;
++
++    if (opt_slow_log)
++    {
++      mysql_slow_log= logger.get_slow_log_file_handler();
++      mysql_slow_log->reopen_file();
++    }
++  }
++
++  if (options & REFRESH_GENERAL_LOG)
++  {
++    MYSQL_QUERY_LOG *mysql_log;
++
++    if (opt_log);
++    {
++      mysql_log= logger.get_log_file_handler();
++      mysql_log->reopen_file();
++    }
++  }
++
++  if (options & REFRESH_ENGINE_LOG)
++  {
++    if (ha_flush_logs(NULL))
++      result= 1;
++  }
++
++  if (options & REFRESH_BINARY_LOG)
++  {
++    if ( mysql_bin_log.is_open() )
++    {
++      mysql_bin_log.rotate_and_purge(RP_FORCE_ROTATE);
++    }
++  }
++
++  if (options & REFRESH_RELAY_LOG)
++  {
++#ifdef HAVE_REPLICATION
++    pthread_mutex_lock(&LOCK_active_mi);
++    rotate_relay_log(active_mi);
++    pthread_mutex_unlock(&LOCK_active_mi);
++#endif
++  }
++
+   if (options & REFRESH_LOG)
+   {
+     /*
+diff -urN 6.0.4-orig/sql/sql_yacc.yy 6.0.4-flush-logs-patched/sql/sql_yacc.yy
+--- 6.0.4-orig/sql/sql_yacc.yy	2008-02-13 04:06:35.000000000 -0800
++++ 6.0.4-flush-logs-patched/sql/sql_yacc.yy	2008-10-25 11:24:13.000000000 -0700
+@@ -675,6 +675,7 @@
+ %token  ENUM
+ %token  EQ                            /* OPERATOR */
+ %token  EQUAL_SYM                     /* OPERATOR */
++%token  ERROR_SYM
+ %token  ERRORS
+ %token  ESCAPED
+ %token  ESCAPE_SYM                    /* SQL-2003-R */
+@@ -708,7 +709,7 @@
+ %token  FULL                          /* SQL-2003-R */
+ %token  FULLTEXT_SYM
+ %token  FUNCTION_SYM                  /* SQL-2003-R */
+-%token  GE
++%token  GENERAL
+ %token  GEOMETRYCOLLECTION
+ %token  GEOMETRY_SYM
+ %token  GET_FORMAT                    /* MYSQL-FUNC */
+@@ -781,6 +782,7 @@
+ %token  LOCATOR_SYM                   /* SQL-2003-N */
+ %token  LOCKS_SYM
+ %token  LOCK_SYM
++%token  LOG_SYM
+ %token  LOGFILE_SYM
+ %token  LOGS_SYM
+ %token  LONGBLOB
+@@ -923,6 +925,7 @@
+ %token  REDUNDANT_SYM
+ %token  REFERENCES                    /* SQL-2003-R */
+ %token  REGEXP
++%token  RELAY
+ %token  RELAY_LOG_FILE_SYM
+ %token  RELAY_LOG_POS_SYM
+ %token  RELAY_THREAD
+@@ -977,6 +980,7 @@
+ %token  SIGNED_SYM
+ %token  SIMPLE_SYM                    /* SQL-2003-N */
+ %token  SLAVE
++%token  SLOW
+ %token  SMALLINT                      /* SQL-2003-R */
+ %token  SNAPSHOT_SYM
+ %token  SOCKET_SYM
+@@ -1304,6 +1308,7 @@
+         init_key_options key_options key_opts key_opt key_using_alg
+         server_def server_options_list server_option
+         definer_opt no_definer definer
++        log_or_logs
+ END_OF_INPUT
+ 
+ %type <NONE> call sp_proc_stmts sp_proc_stmts1 sp_proc_stmt
+@@ -6903,6 +6908,10 @@
+           }
+         | LEFT '(' expr ',' expr ')'
+           { $$= new (YYTHD->mem_root) Item_func_left($3,$5); }
++        | LOG_SYM '(' expr ')'
++          { $$= new (YYTHD->mem_root) Item_func_log($3); }
++        | LOG_SYM '(' expr ',' expr ')'
++          { $$= new (YYTHD->mem_root) Item_func_log($3,$5); }
+         | MINUTE_SYM '(' expr ')'
+           { $$= new (YYTHD->mem_root) Item_func_minute($3); }
+         | MONTH_SYM '(' expr ')'
+@@ -9321,6 +9330,11 @@
+           { Lex->sql_command= SQLCOM_SHOW_ENGINE_LOGS; }
+         ;
+ 
++log_or_logs:
++          LOG_SYM
++        | LOGS_SYM
++        ;
++
+ master_or_binary:
+           MASTER_SYM
+         | BINARY
+@@ -9437,12 +9451,25 @@
+         | flush_option
+         ;
+ 
++
+ flush_option:
+-          table_or_tables
++        table_or_tables
+           { Lex->type|= REFRESH_TABLES; }
+           opt_table_list {}
+         | TABLES WITH READ_SYM LOCK_SYM
+           { Lex->type|= REFRESH_TABLES | REFRESH_READ_LOCK; }
++        | ERROR_SYM log_or_logs
++        { Lex->type|= REFRESH_ERROR_LOG; }
++        | ENGINE_SYM log_or_logs
++        { Lex->type|= REFRESH_ENGINE_LOG; } 
++        | GENERAL log_or_logs
++        { Lex->type|= REFRESH_GENERAL_LOG; }
++        | SLOW log_or_logs
++        { Lex->type|= REFRESH_SLOW_LOG; }
++        | BINARY log_or_logs
++        { Lex->type|= REFRESH_BINARY_LOG; }
++        | RELAY log_or_logs
++        { Lex->type|= REFRESH_RELAY_LOG; }
+         | QUERY_SYM CACHE_SYM
+           { Lex->type|= REFRESH_QUERY_CACHE_FREE; }
+         | HOSTS_SYM
+@@ -10425,6 +10452,7 @@
+         | ENUM                     {}
+         | ENGINE_SYM               {}
+         | ENGINES_SYM              {}
++        | ERROR_SYM                {}
+         | ERRORS                   {}
+         | ESCAPE_SYM               {}
+         | EVENT_SYM                {}
+@@ -10467,6 +10495,7 @@
+         | LIST_SYM                 {}
+         | LOCAL_SYM                {}
+         | LOCKS_SYM                {}
++        | LOG_SYM                  {}
+         | LOGFILE_SYM              {}
+         | LOGS_SYM                 {}
+         | MAX_ROWS                 {}
+@@ -10547,6 +10576,7 @@
+         | REDO_BUFFER_SIZE_SYM     {}
+         | REDOFILE_SYM             {}
+         | REDUNDANT_SYM            {}
++        | RELAY                    {}
+         | RELAY_LOG_FILE_SYM       {}
+         | RELAY_LOG_POS_SYM        {}
+         | RELAY_THREAD             {}

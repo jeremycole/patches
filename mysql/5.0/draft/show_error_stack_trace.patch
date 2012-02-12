@@ -1,0 +1,781 @@
+diff -aur -x '*.in' mysql-5.0.62/sql/item_create.cc mysql-5.0.62.caller/sql/item_create.cc
+--- mysql-5.0.62/sql/item_create.cc	2008-05-16 02:08:11.000000000 -0700
++++ mysql-5.0.62.caller/sql/item_create.cc	2008-07-15 10:39:28.000000000 -0700
+@@ -63,6 +63,21 @@
+   return new Item_func_bit_count(a);
+ }
+ 
++Item *create_func_caller(Item *a)
++{
++  return new Item_func_caller(a);
++}
++
++Item *create_func_caller_depth()
++{
++  return new Item_func_caller_depth();
++}
++
++Item *create_func_caller_ws(Item *a, Item *b)
++{
++  return new Item_func_caller_ws(a, b);
++}
++
+ Item *create_func_ceiling(Item* a)
+ {
+   return new Item_func_ceiling(a);
+diff -aur -x '*.in' mysql-5.0.62/sql/item_create.h mysql-5.0.62.caller/sql/item_create.h
+--- mysql-5.0.62/sql/item_create.h	2008-05-16 02:08:02.000000000 -0700
++++ mysql-5.0.62.caller/sql/item_create.h	2008-07-15 10:39:28.000000000 -0700
+@@ -24,6 +24,9 @@
+ Item *create_func_bin(Item* a);
+ Item *create_func_bit_count(Item* a);
+ Item *create_func_bit_length(Item* a);
++Item *create_func_caller(Item *a);
++Item *create_func_caller_depth();
++Item *create_func_caller_ws(Item *a, Item *b);
+ Item *create_func_coercibility(Item* a);
+ Item *create_func_ceiling(Item* a);
+ Item *create_func_char_length(Item* a);
+diff -aur -x '*.in' mysql-5.0.62/sql/item_func.cc mysql-5.0.62.caller/sql/item_func.cc
+--- mysql-5.0.62/sql/item_func.cc	2008-05-16 02:09:04.000000000 -0700
++++ mysql-5.0.62.caller/sql/item_func.cc	2008-07-15 12:11:34.000000000 -0700
+@@ -5275,6 +5275,13 @@
+   return ull->thread_id;
+ }
+ 
++longlong Item_func_caller_depth::val_int()
++{
++  DBUG_ASSERT(fixed == 1);
++  THD *thd= current_thd;
++
++  return thd->query_stack.depth();
++}
+ 
+ longlong Item_func_row_count::val_int()
+ {
+@@ -5286,7 +5293,6 @@
+ 
+ 
+ 
+-
+ Item_func_sp::Item_func_sp(Name_resolution_context *context_arg, sp_name *name)
+   :Item_func(), context(context_arg), m_name(name), m_sp(NULL), sp_result_field(NULL)
+ {
+diff -aur -x '*.in' mysql-5.0.62/sql/item_func.h mysql-5.0.62.caller/sql/item_func.h
+--- mysql-5.0.62/sql/item_func.h	2008-05-16 02:08:32.000000000 -0700
++++ mysql-5.0.62.caller/sql/item_func.h	2008-07-15 10:39:28.000000000 -0700
+@@ -1507,6 +1507,16 @@
+ };
+ 
+ 
++class Item_func_caller_depth :public Item_int_func
++{
++public:
++  Item_func_caller_depth() :Item_int_func() {}
++  longlong val_int();
++  const char *func_name() const { return "caller_depth"; }
++  void fix_length_and_dec() { decimals= 0; maybe_null=0; }
++};
++
++
+ class Item_func_row_count :public Item_int_func
+ {
+ public:
+diff -aur -x '*.in' mysql-5.0.62/sql/item_strfunc.cc mysql-5.0.62.caller/sql/item_strfunc.cc
+--- mysql-5.0.62/sql/item_strfunc.cc	2008-05-16 02:08:34.000000000 -0700
++++ mysql-5.0.62.caller/sql/item_strfunc.cc	2008-07-15 12:12:50.000000000 -0700
+@@ -93,6 +93,90 @@
+ 	  (longlong) 0);
+ }
+ 
++String *Item_func_caller::val_str(String *str)
++{
++  THD *thd= current_thd;
++  uint32 cur= 1;
++  uint32 pos= 0;
++  Query *query;
++  List_iterator<Query> it(thd->query_stack.stack);
++
++  if(arg_count)
++    pos= args[0]->val_int();
++
++  if(pos && thd->query_stack.is_empty())
++    goto invalid_stack;
++
++  null_value= 0;
++  if(pos == 0)
++  {
++    str->set(thd->query, thd->query_length, system_charset_info);
++  } else {
++    while((query= it++) && (++cur <= pos)) { }
++    if(!query)
++      goto invalid_stack;
++    str->set(query->query, query->query_length, system_charset_info);
++  }
++  return str;
++
++ invalid_stack:
++  null_value= 1;
++  return 0;
++}
++
++void Item_func_caller::fix_length_and_dec()
++{
++  //max_length= current_thd->;
++  maybe_null= 1;
++}
++
++
++String *Item_func_caller_ws::val_str(String *str)
++{
++  uint32 cur= 1;
++  uint32 pos= 0;
++  Query *query;
++  List_iterator<Query> it(current_thd->query_stack.stack);
++  String sep, *psep;
++
++  if(arg_count) 
++  {
++    psep= args[0]->val_str(&sep);
++    pos= args[1]->val_int();
++  }
++
++  if(pos && current_thd->query_stack.is_empty())
++    goto invalid_stack;
++
++  null_value= 0;
++  if(pos == 0)
++  {
++    str->set(current_thd->query, current_thd->query_length, system_charset_info);
++  } else {
++    while((query= it++) && (++cur <= pos)) { }
++    if(!query)
++      goto invalid_stack;
++    str->set(query->query, query->query_length, system_charset_info);
++  }
++
++  while(query= it++)
++  {
++    str->append(psep->ptr());
++    str->append(query->query);
++  }
++  return str;
++
++ invalid_stack:
++  null_value= 1;
++  return 0;
++}
++
++void Item_func_caller_ws::fix_length_and_dec()
++{
++  //max_length= current_thd->;
++  maybe_null= 1;
++}
++
+ 
+ String *Item_func_md5::val_str(String *str)
+ {
+diff -aur -x '*.in' mysql-5.0.62/sql/item_strfunc.h mysql-5.0.62.caller/sql/item_strfunc.h
+--- mysql-5.0.62/sql/item_strfunc.h	2008-05-16 02:08:11.000000000 -0700
++++ mysql-5.0.62.caller/sql/item_strfunc.h	2008-07-15 10:39:28.000000000 -0700
+@@ -38,6 +38,27 @@
+   bool fix_fields(THD *thd, Item **ref);
+ };
+ 
++class Item_func_caller :public Item_str_func
++{
++  String tmp_value;
++public:
++  Item_func_caller(Item *a) :Item_str_func(a) {}
++  String *val_str(String *);
++  void fix_length_and_dec();
++  const char *func_name() const { return "caller"; }
++};
++
++class Item_func_caller_ws :public Item_str_func
++{
++  String tmp_value;
++public:
++  Item_func_caller_ws(Item *a, Item *b) :Item_str_func(a, b) {}
++  String *val_str(String *);
++  void fix_length_and_dec();
++  const char *func_name() const { return "caller_ws"; }
++};
++
++
+ class Item_func_md5 :public Item_str_func
+ {
+   String tmp_value;
+diff -aur -x '*.in' mysql-5.0.62/sql/lex.h mysql-5.0.62.caller/sql/lex.h
+--- mysql-5.0.62/sql/lex.h	2008-05-16 02:08:48.000000000 -0700
++++ mysql-5.0.62.caller/sql/lex.h	2008-07-16 23:41:06.000000000 -0700
+@@ -180,6 +180,7 @@
+   { "ENGINE",		SYM(ENGINE_SYM)},
+   { "ENGINES",		SYM(ENGINES_SYM)},
+   { "ENUM",		SYM(ENUM)},
++  { "ERROR",    SYM(ERROR_SYM)},
+   { "ERRORS",		SYM(ERRORS)},
+   { "ESCAPE",		SYM(ESCAPE_SYM)},
+   { "ESCAPED",		SYM(ESCAPED)},
+@@ -460,6 +461,7 @@
+   { "SQL_TSI_QUARTER",  SYM(QUARTER_SYM)},
+   { "SQL_TSI_YEAR",     SYM(YEAR_SYM)},
+   { "SSL",		SYM(SSL_SYM)},
++  { "STACK",    SYM(STACK_SYM)},
+   { "START",		SYM(START_SYM)},
+   { "STARTING",		SYM(STARTING)},
+   { "STATUS",		SYM(STATUS_SYM)},
+@@ -487,6 +489,7 @@
+   { "TINYINT",		SYM(TINYINT)},
+   { "TINYTEXT",		SYM(TINYTEXT)},
+   { "TO",		SYM(TO_SYM)},
++  { "TRACE",      SYM(TRACE_SYM)},
+   { "TRAILING",		SYM(TRAILING)},
+   { "TRANSACTION",	SYM(TRANSACTION_SYM)},
+   { "TRIGGER",          SYM(TRIGGER_SYM)},
+@@ -563,6 +566,9 @@
+   { "BIT_OR",		SYM(BIT_OR)},
+   { "BIT_AND",		SYM(BIT_AND)},
+   { "BIT_XOR",		SYM(BIT_XOR)},
++  { "CALLER",           F_SYM(FUNC_ARG1),0,CREATE_FUNC(create_func_caller)},
++  { "CALLER_DEPTH",     F_SYM(FUNC_ARG0),0,CREATE_FUNC(create_func_caller_depth)},
++  { "CALLER_WS",        F_SYM(FUNC_ARG2),0,CREATE_FUNC(create_func_caller_ws)},
+   { "CAST",		SYM(CAST_SYM)},
+   { "CEIL",		F_SYM(FUNC_ARG1),0,CREATE_FUNC(create_func_ceiling)},
+   { "CEILING",		F_SYM(FUNC_ARG1),0,CREATE_FUNC(create_func_ceiling)},
+diff -aur -x '*.in' mysql-5.0.62/sql/mysql_priv.h mysql-5.0.62.caller/sql/mysql_priv.h
+--- mysql-5.0.62/sql/mysql_priv.h	2008-05-16 02:08:47.000000000 -0700
++++ mysql-5.0.62.caller/sql/mysql_priv.h	2008-07-16 23:41:49.000000000 -0700
+@@ -950,6 +950,7 @@
+ bool mysqld_show_storage_engines(THD *thd);
+ bool mysqld_show_privileges(THD *thd);
+ bool mysqld_show_column_types(THD *thd);
++bool mysqld_show_error_stack_trace(THD *thd);
+ bool mysqld_help (THD *thd, const char *text);
+ void calc_sum_of_all_status(STATUS_VAR *to);
+ 
+diff -aur -x '*.in' mysql-5.0.62/sql/mysqld.cc mysql-5.0.62.caller/sql/mysqld.cc
+--- mysql-5.0.62/sql/mysqld.cc	2008-05-16 02:08:11.000000000 -0700
++++ mysql-5.0.62.caller/sql/mysqld.cc	2008-07-16 23:30:49.000000000 -0700
+@@ -2654,6 +2654,14 @@
+   */
+   if ((thd= current_thd))
+   {
++    if(thd->error_stack_trace) 
++    {
++      delete thd->error_stack_trace;
++    }
++
++    thd->error_stack_trace= thd->query_stack.new_deep_copy();
++    thd->error_stack_trace->push_front_copy(thd->query, thd->query_length);
++
+     /*
+       TODO: There are two exceptions mechanism (THD and sp_rcontext),
+       this could be improved by having a common stack of handlers.
+diff -aur -x '*.in' mysql-5.0.62/sql/sp_head.cc mysql-5.0.62.caller/sql/sp_head.cc
+--- mysql-5.0.62/sql/sp_head.cc	2008-05-16 02:08:12.000000000 -0700
++++ mysql-5.0.62.caller/sql/sp_head.cc	2008-07-16 23:42:52.000000000 -0700
+@@ -178,6 +178,7 @@
+   case SQLCOM_SHOW_CREATE_FUNC:
+   case SQLCOM_SHOW_CREATE_PROC:
+   case SQLCOM_SHOW_DATABASES:
++  case SQLCOM_SHOW_ERROR_STACK_TRACE:
+   case SQLCOM_SHOW_ERRORS:
+   case SQLCOM_SHOW_FIELDS:
+   case SQLCOM_SHOW_GRANTS:
+@@ -2585,14 +2586,11 @@
+ int
+ sp_instr_stmt::execute(THD *thd, uint *nextp)
+ {
+-  char *query;
+-  uint32 query_length;
+   int res;
+   DBUG_ENTER("sp_instr_stmt::execute");
+   DBUG_PRINT("info", ("command: %d", m_lex_keeper.sql_command()));
+ 
+-  query= thd->query;
+-  query_length= thd->query_length;
++  thd->query_stack.push_front(thd->query, thd->query_length);
+   if (!(res= alloc_query(thd, m_query.str, m_query.length+1)) &&
+       !(res=subst_spvars(thd, this, &m_query)))
+   {
+@@ -2608,8 +2606,7 @@
+     }
+     else
+       *nextp= m_ip+1;
+-    thd->query= query;
+-    thd->query_length= query_length;
++    thd->query_stack.pop()->get(&thd->query, &thd->query_length);
+   }
+   DBUG_RETURN(res);
+ }
+diff -aur -x '*.in' mysql-5.0.62/sql/sql_class.cc mysql-5.0.62.caller/sql/sql_class.cc
+--- mysql-5.0.62/sql/sql_class.cc	2008-05-16 02:08:48.000000000 -0700
++++ mysql-5.0.62.caller/sql/sql_class.cc	2008-07-17 00:36:45.000000000 -0700
+@@ -177,7 +177,8 @@
+    rand_used(0), time_zone_used(0),
+    last_insert_id_used(0), last_insert_id_used_bin_log(0), insert_id_used(0),
+    clear_next_insert_id(0), in_lock_tables(0), bootstrap(0),
+-   derived_tables_processing(FALSE), spcont(NULL), m_lip(NULL)
++   derived_tables_processing(FALSE), spcont(NULL), m_lip(NULL),
++   error_stack_trace(NULL)
+ {
+   ulong tmp;
+ 
+@@ -1733,6 +1734,183 @@
+ }
+ 
+ /*
++  Query functions for query stack
++*/
++
++Query::Query()
++{
++  query= NULL;
++  query_length= 0;
++  deep_copied= 0;
++}
++
++Query::Query(char *in_query, uint32 in_query_length)
++{
++  root= NULL;
++  query= NULL;
++  query_length= 0;
++  deep_copied= 0;
++
++  set(in_query, in_query_length);
++}
++
++Query::Query(char *in_query, uint32 in_query_length, bool in_deep_copy, MEM_ROOT *in_root)
++{
++  root= in_root;
++  query= NULL;
++  query_length= 0;
++  deep_copied= 0;
++
++  if(in_deep_copy)
++    copy(in_query, in_query_length);
++  else
++    set(in_query, in_query_length);
++}
++
++
++Query::~Query()
++{
++  if(deep_copied) my_free(query, MYF(0));
++}
++
++void Query::set(char *in_query, uint32 in_query_length)
++{
++  query= in_query;
++  query_length= in_query_length;
++}
++
++bool Query::copy(char *in_query, uint32 in_query_length)
++{
++  if(!(query= alloc_root(root, in_query_length)))
++    return 1;
++  
++  memcpy(query, in_query, in_query_length);
++
++  query_length= in_query_length;
++  deep_copied= 1;
++
++  return 0;
++}
++
++bool Query::copy_current()
++{
++  if(deep_copied)
++    return 0;
++
++  return this->copy(query, query_length);
++}
++
++void Query::get(char **out_query, uint32 *out_query_length)
++{
++  *out_query= query;
++  *out_query_length= query_length;
++}
++
++
++/*
++  QueryStack functions
++*/
++
++QueryStack::QueryStack()
++{
++  /* TODO: change these defines */
++  init_sql_alloc(&root,
++                 QUERY_ALLOC_BLOCK_SIZE,
++                 QUERY_ALLOC_PREALLOC_SIZE);
++}
++
++QueryStack::~QueryStack()
++{
++  cleanup();
++  free_root(&root, MYF(0));
++}
++
++void QueryStack::cleanup()
++{
++  while(Query *q = pop())
++  {
++    delete q;
++  }
++}
++
++bool QueryStack::push_front(char *in_query, uint32 in_query_length)
++{
++  return stack.push_front(new Query(in_query, in_query_length));
++}
++
++bool QueryStack::push_front_copy(char *in_query, uint32 in_query_length)
++{
++  return stack.push_front(new Query(in_query, in_query_length, 1, &root), &root);
++}
++
++bool QueryStack::push_back(char *in_query, uint32 in_query_length)
++{
++  return stack.push_back(new Query(in_query, in_query_length));
++}
++
++bool QueryStack::push_back_copy(char *in_query, uint32 in_query_length)
++{
++  return stack.push_back(new Query(in_query, in_query_length, 1, &root), &root);
++}
++
++Query *QueryStack::pop()
++{
++  return stack.pop();
++}
++
++bool QueryStack::is_empty()
++{
++  return stack.is_empty();
++}
++
++bool QueryStack::deep_copy()
++{
++  List_iterator<Query> stack_iterator(stack);
++  Query *query;
++
++  while((query= stack_iterator++))
++  {
++    if((query->copy_current()))
++      return 1;
++  }
++  
++  return 0;
++}
++
++uint32 QueryStack::depth()
++{
++  uint32 depth;
++  List_iterator<Query> stack_iterator(stack);
++
++  if(stack.is_empty())
++    return 0;
++
++  for(depth=0; stack_iterator++; depth++)  { }
++
++  return depth;
++}
++
++QueryStack *QueryStack::new_deep_copy()
++{
++  QueryStack *qs;
++  List_iterator<Query> stack_iterator(stack);
++  Query *query;
++  
++  qs= new QueryStack;
++  while((query= stack_iterator++))
++  {
++    if((qs->push_back_copy(query->query, query->query_length)))
++      goto error;
++  }
++
++  return qs;
++  
++ error:
++  delete qs;
++  return NULL;
++}
++
++/*
+   Statement functions 
+ */
+ 
+diff -aur -x '*.in' mysql-5.0.62/sql/sql_class.h mysql-5.0.62.caller/sql/sql_class.h
+--- mysql-5.0.62/sql/sql_class.h	2008-05-16 02:08:47.000000000 -0700
++++ mysql-5.0.62.caller/sql/sql_class.h	2008-07-17 00:37:33.000000000 -0700
+@@ -672,6 +672,51 @@
+   double last_query_cost;
+ } STATUS_VAR;
+ 
++class Query
++{
++public:
++  MEM_ROOT *root;
++  char *query;
++  uint32 query_length;
++  my_bool deep_copied;
++
++  Query();
++  Query(char *in_query, uint32 in_query_length);
++  Query(char *in_query, uint32 in_query_length, bool in_deep_copy, MEM_ROOT *in_root);
++  ~Query();
++
++  void set(char *in_query, uint32 in_query_length);
++  bool copy(char *in_query, uint32 in_query_length);
++  bool copy_current();
++  void get(char **out_query, uint32 *out_query_length);
++};
++
++class QueryStack
++{
++public:
++  MEM_ROOT root;
++  bool deep_copied;
++  List<Query> stack;
++
++  QueryStack();
++  ~QueryStack();
++
++  bool alloc_root();
++
++  void cleanup();
++  bool push_front(char *in_query, uint32 in_query_length);
++  bool push_front_copy(char *in_query, uint32 in_query_length);
++  bool push_back(char *in_query, uint32 in_query_length);
++  bool push_back_copy(char *in_query, uint32 in_query_length);
++  Query *pop();
++  bool is_empty();
++  
++  uint32 depth();
++  
++  bool deep_copy();
++  QueryStack *new_deep_copy();
++};
++
+ /*
+   This is used for 'SHOW STATUS'. It must be updated to the last ulong
+   variable in system_status_var which is makes sens to add to the global
+@@ -841,6 +886,8 @@
+   uint32 query_length;                          // current query length
+   Server_side_cursor *cursor;
+ 
++  QueryStack query_stack;
++
+ public:
+ 
+   /* This constructor is called for backup statements */
+@@ -1406,6 +1453,9 @@
+   List	     <MYSQL_ERROR> warn_list;
+   uint	     warn_count[(uint) MYSQL_ERROR::WARN_LEVEL_END];
+   uint	     total_warn_count;
++
++  QueryStack *error_stack_trace;
++
+   /*
+     Id of current query. Statement can be reused to execute several queries
+     query_id is global in context of the whole MySQL server.
+@@ -1712,6 +1762,13 @@
+     net.last_errno= 0;
+     net.report_error= 0;
+     query_error= 0;
++    /*
++    if(error_stack_trace) 
++    {
++      delete error_stack_trace;
++      error_stack_trace= NULL;
++    }
++    */
+   }
+   inline bool vio_ok() const { return net.vio != 0; }
+ #else
+diff -aur -x '*.in' mysql-5.0.62/sql/sql_lex.h mysql-5.0.62.caller/sql/sql_lex.h
+--- mysql-5.0.62/sql/sql_lex.h	2008-05-16 02:08:03.000000000 -0700
++++ mysql-5.0.62.caller/sql/sql_lex.h	2008-07-16 23:43:50.000000000 -0700
+@@ -81,6 +81,7 @@
+   SQLCOM_SHOW_SLAVE_HOSTS, SQLCOM_DELETE_MULTI, SQLCOM_UPDATE_MULTI,
+   SQLCOM_SHOW_BINLOG_EVENTS, SQLCOM_SHOW_NEW_MASTER, SQLCOM_DO,
+   SQLCOM_SHOW_WARNS, SQLCOM_EMPTY_QUERY, SQLCOM_SHOW_ERRORS,
++  SQLCOM_SHOW_ERROR_STACK_TRACE,
+   SQLCOM_SHOW_COLUMN_TYPES, SQLCOM_SHOW_STORAGE_ENGINES, SQLCOM_SHOW_PRIVILEGES,
+   SQLCOM_HELP, SQLCOM_CREATE_USER, SQLCOM_DROP_USER, SQLCOM_RENAME_USER,
+   SQLCOM_REVOKE_ALL, SQLCOM_CHECKSUM,
+diff -aur -x '*.in' mysql-5.0.62/sql/sql_list.h mysql-5.0.62.caller/sql/sql_list.h
+--- mysql-5.0.62/sql/sql_list.h	2008-05-16 02:08:35.000000000 -0700
++++ mysql-5.0.62.caller/sql/sql_list.h	2008-07-16 23:22:00.000000000 -0700
+@@ -179,6 +179,19 @@
+     }
+     return 1;
+   }
++  inline bool push_front(void *info, MEM_ROOT *mem_root)
++  {
++    list_node *node=new (mem_root) list_node(info,first);
++    if (node)
++    {
++      if (last == &first)
++	last= &node->next;
++      first=node;
++      elements++;
++      return 0;
++    }
++    return 1;
++  }
+   void remove(list_node **prev)
+   {
+     list_node *node=(*prev)->next;
+@@ -401,6 +414,8 @@
+   inline bool push_back(T *a, MEM_ROOT *mem_root)
+   { return base_list::push_back(a, mem_root); }
+   inline bool push_front(T *a) { return base_list::push_front(a); }
++  inline bool push_front(T *a, MEM_ROOT *mem_root)
++    { return base_list::push_front(a, mem_root); }
+   inline T* head() {return (T*) base_list::head(); }
+   inline T** head_ref() {return (T**) base_list::head_ref(); }
+   inline T* pop()  {return (T*) base_list::pop(); }
+diff -aur -x '*.in' mysql-5.0.62/sql/sql_parse.cc mysql-5.0.62.caller/sql/sql_parse.cc
+--- mysql-5.0.62/sql/sql_parse.cc	2008-05-16 02:08:46.000000000 -0700
++++ mysql-5.0.62.caller/sql/sql_parse.cc	2008-07-16 23:45:03.000000000 -0700
+@@ -2227,6 +2227,8 @@
+     net_send_error(thd);
+ 
+   log_slow_statement(thd);
++  
++  thd->query_stack.cleanup();
+ 
+   thd->proc_info="cleaning up";
+   VOID(pthread_mutex_lock(&LOCK_thread_count)); // For process list
+@@ -2804,6 +2806,9 @@
+ 			      (1L << (uint) MYSQL_ERROR::WARN_LEVEL_ERROR));
+     break;
+   }
++  case SQLCOM_SHOW_ERROR_STACK_TRACE:
++    res= mysqld_show_error_stack_trace(thd);
++    break;
+   case SQLCOM_SHOW_NEW_MASTER:
+   {
+     if (check_global_access(thd, REPL_SLAVE_ACL))
+diff -aur -x '*.in' mysql-5.0.62/sql/sql_prepare.cc mysql-5.0.62.caller/sql/sql_prepare.cc
+--- mysql-5.0.62/sql/sql_prepare.cc	2008-05-16 02:09:00.000000000 -0700
++++ mysql-5.0.62.caller/sql/sql_prepare.cc	2008-07-16 23:45:38.000000000 -0700
+@@ -1788,6 +1788,7 @@
+     break;
+ 
+   case SQLCOM_SHOW_DATABASES:
++  case SQLCOM_SHOW_ERROR_STACK_TRACE:
+   case SQLCOM_SHOW_PROCESSLIST:
+   case SQLCOM_SHOW_STORAGE_ENGINES:
+   case SQLCOM_SHOW_PRIVILEGES:
+diff -aur -x '*.in' mysql-5.0.62/sql/sql_show.cc mysql-5.0.62.caller/sql/sql_show.cc
+--- mysql-5.0.62/sql/sql_show.cc	2008-05-16 02:08:24.000000000 -0700
++++ mysql-5.0.62.caller/sql/sql_show.cc	2008-07-17 00:29:53.000000000 -0700
+@@ -91,6 +91,42 @@
+ }
+ 
+ 
++bool mysqld_show_error_stack_trace(THD *thd)
++{
++  List<Item> field_list;
++  Query *query;
++  Protocol *protocol= thd->protocol;
++
++  DBUG_ENTER("mysqld_show_error_stack_trace");
++  
++  /* TODO: length bad */
++  field_list.push_back(new Item_return_int("Depth", 10, MYSQL_TYPE_LONG));
++  field_list.push_back(new Item_empty_string("Query", 200));
++
++  if (protocol->send_fields(&field_list, Protocol::SEND_NUM_ROWS | Protocol::SEND_EOF))
++    DBUG_RETURN(TRUE);
++
++  if(thd->error_stack_trace)
++  {
++    List_iterator<Query> stack_iterator(thd->error_stack_trace->stack);
++    for(uint32 depth=0; (query= stack_iterator++); depth++)
++    {
++      protocol->prepare_for_resend();
++      protocol->store(depth);
++      protocol->store(query->query, query->query_length, system_charset_info);
++      
++      if (protocol->write())
++      {
++        send_eof(thd);
++        DBUG_RETURN(TRUE);
++      }
++    }
++  }  
++
++  send_eof(thd);
++  DBUG_RETURN(FALSE);
++}
++
+ /***************************************************************************
+  List all privileges supported
+ ***************************************************************************/
+diff -aur -x '*.in' mysql-5.0.62/sql/sql_yacc.yy mysql-5.0.62.caller/sql/sql_yacc.yy
+--- mysql-5.0.62/sql/sql_yacc.yy	2008-05-16 02:08:34.000000000 -0700
++++ mysql-5.0.62.caller/sql/sql_yacc.yy	2008-07-16 23:58:45.000000000 -0700
+@@ -605,6 +605,7 @@
+ %token  ENUM
+ %token  EQ
+ %token  EQUAL_SYM
++%token  ERROR_SYM
+ %token  ERRORS
+ %token  ESCAPED
+ %token  ESCAPE_SYM
+@@ -914,6 +915,7 @@
+ %token  SQL_SYM
+ %token  SQL_THREAD
+ %token  SSL_SYM
++%token  STACK_SYM
+ %token  STARTING
+ %token  START_SYM
+ %token  STATUS_SYM
+@@ -947,6 +949,7 @@
+ %token  TINYINT
+ %token  TINYTEXT
+ %token  TO_SYM
++%token  TRACE_SYM
+ %token  TRAILING
+ %token  TRANSACTION_SYM
+ %token  TRIGGER_SYM
+@@ -7122,6 +7125,11 @@
+           { Lex->sql_command = SQLCOM_SHOW_WARNS;}
+         | ERRORS opt_limit_clause_init
+           { Lex->sql_command = SQLCOM_SHOW_ERRORS;}
++  | ERROR_SYM STACK_SYM TRACE_SYM
++    {
++      LEX *lex=Lex;
++      lex->sql_command= SQLCOM_SHOW_ERROR_STACK_TRACE;
++    }
+         | opt_var_type STATUS_SYM wild_and_where
+           {
+             LEX *lex= Lex;
+@@ -8307,6 +8315,7 @@
+ 	| ENUM			{}
+ 	| ENGINE_SYM		{}
+ 	| ENGINES_SYM		{}
++	| ERROR_SYM  {}
+ 	| ERRORS		{}
+ 	| ESCAPE_SYM		{}
+ 	| EVENTS_SYM		{}
+@@ -8438,6 +8447,7 @@
+ 	| SQL_BUFFER_RESULT	{}
+ 	| SQL_NO_CACHE_SYM	{}
+ 	| SQL_THREAD		{}
++	| STACK_SYM     {}
+ 	| STATUS_SYM		{}
+ 	| STORAGE_SYM		{}
+ 	| STRING_SYM		{}
+@@ -8450,6 +8460,7 @@
+ 	| TEMPORARY		{}
+ 	| TEMPTABLE_SYM		{}
+ 	| TEXT_SYM		{}
++	| TRACE_SYM    {}
+ 	| TRANSACTION_SYM	{}
+ 	| TRIGGERS_SYM		{}
+ 	| TIMESTAMP		{}

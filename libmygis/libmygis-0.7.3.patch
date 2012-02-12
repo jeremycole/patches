@@ -1,0 +1,59 @@
+Index: prj/prj.c
+===================================================================
+--- prj/prj.c	(revision 42)
++++ prj/prj.c	(working copy)
+@@ -57,6 +57,7 @@
+   int fd;
+   off_t size;
+   char *name;
++  char str_value[100];
+   PAIRNODE *param;
+ 
+   DBUG_ENTER("prj_parse");
+@@ -125,7 +126,14 @@
+     strcat(prj->proj4_def, " +");
+     strcat(prj->proj4_def, name);
+     strcat(prj->proj4_def, "=");
+-    strcat(prj->proj4_def, param->pair.value);
++    if((prj->projcs.unit.name) && ((strcmp(name, "x_0")==0) || (strcmp(name, "y_0")==0)))
++    {
++      sprintf(str_value, "%0.10f", 
++              prj->projcs.unit.value * atof(param->pair.value));
++      strcat(prj->proj4_def, str_value);
++    } else {
++      strcat(prj->proj4_def, param->pair.value);
++    }
+   }
+ 
+   close(fd);
+Index: configure.in
+===================================================================
+--- configure.in	(revision 42)
++++ configure.in	(working copy)
+@@ -1,7 +1,7 @@
+ AC_INIT()
+ AC_CANONICAL_SYSTEM
+ 
+-AM_INIT_AUTOMAKE("mygis", "0.7.2")
++AM_INIT_AUTOMAKE("mygis", "0.7.3")
+ AM_CONFIG_HEADER(config.h)
+ 
+ AC_PROG_CC
+Index: ChangeLog
+===================================================================
+--- ChangeLog	(revision 42)
++++ ChangeLog	(working copy)
+@@ -4,6 +4,13 @@
+ VERSION 0.7
+ ***********
+ 
++0.7.3     2007-02-23
++
++  * Fixed a bug with complex projections which use a different projection
++    not based on meters.  The x_0 and y_0 parameters are now converted to
++    meters before being passed to PROJ.4.  Thanks to Adam Dingle for finding
++    this bug.
++
+ 0.7.2     2007-01-14
+ 
+   * Updated copyright to 2007.

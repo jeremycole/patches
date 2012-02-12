@@ -1,0 +1,849 @@
+Index: tools/mysqlgisimport.c
+===================================================================
+--- tools/mysqlgisimport.c	(revision 7)
++++ tools/mysqlgisimport.c	(working copy)
+@@ -21,6 +21,7 @@
+ #include <string.h>
+ #include <libgen.h>
+ #include <errno.h>
++#include <assert.h>
+ 
+ #define _GNU_SOURCE
+ #include <getopt.h>
+@@ -32,24 +33,28 @@
+ #include "wkt/wkt.h"
+ 
+ const char *program = {"mysqlgisimport"};
+-const char *version = {"0.1"};
++const char *version = {"0.5"};
+ 
+-static const char *short_options = {"?dDXSsnt:q:g:o:r:"};
++static const char *short_options = {"?dDXSsnt:q:g:o:r:a:p:Gi"};
+ static struct option long_options[] = {
+-  {"help",           no_argument,       NULL, '?'},
++  {"help",                no_argument,       NULL, '?'},
+ #ifdef DEBUG
+-  {"debug",          optional_argument, NULL, 'd'},
++  {"debug",               optional_argument, NULL, 'd'},
+ #endif
+-  {"no-dbf",         no_argument,       NULL, 'D'},
+-  {"no-shx",         no_argument,       NULL, 'X'},
+-  {"no-shp",         no_argument,       NULL, 'S'},
+-  {"no-schema",      no_argument,       NULL, 's'},
+-  {"no-data",        no_argument,       NULL, 'n'},
+-  {"table",          required_argument, NULL, 't'},
+-  {"query",          required_argument, NULL, 'q'},
+-  {"geometry-field", required_argument, NULL, 'g'},
+-  {"output",         required_argument, NULL, 'o'},
+-  {"remap",          required_argument, NULL, 'r'},
++  {"no-dbf",              no_argument,       NULL, 'D'},
++  {"no-shx",              no_argument,       NULL, 'X'},
++  {"no-shp",              no_argument,       NULL, 'S'},
++  {"no-schema",           no_argument,       NULL, 's'},
++  {"no-data",             no_argument,       NULL, 'n'},
++  {"table",               required_argument, NULL, 't'},
++  {"query",               required_argument, NULL, 'q'},
++  {"geometry-field",      required_argument, NULL, 'g'},
++  {"output",              required_argument, NULL, 'o'},
++  {"remap",               required_argument, NULL, 'r'},
++  {"auto-increment-key",  required_argument, NULL, 'a'},
++  {"primary-key",         required_argument, NULL, 'p'},
++  {"geometry-as-text",    no_argument,       NULL, 'G'},
++  {"delimited",           no_argument,       NULL, 'i'},
+   {0, 0, 0, 0}
+ };
+ 
+@@ -61,22 +66,40 @@
+   fprintf(f, "%s\n", mygis_copyright);
+   fprintf(f, "Distributed under the %s\n", mygis_license);
+   fprintf(f, "\n");
+-  fprintf(f, "Usage: %s [options] </path/to/shapefiles>\n", program);
+-  fprintf(f, "  -?, --help          Display this help and exit.\n");
++  fprintf(f, "Usage: %s [options] <shapefile> [ <shapefile> ... ]\n", program);
++
++  fprintf(f, "\nGeneral Options:\n");
++  fprintf(f, "  -?, --help           Display this help and exit.\n");
+ #ifdef DEBUG
+-  fprintf(f, "  -d, --debug         Output debugging information while running.\n");
++  fprintf(f, "  -d, --debug          Output debugging information while running.\n");
+ #endif
+-  fprintf(f, "  -D, --no-dbf        Don't use a DBF (database) file.\n");
+-  fprintf(f, "  -S, --no-shp        Don't use a SHP (shape) file, implies --no-shx.\n");
+-  fprintf(f, "  -X, --no-shx        Don't use a SHX (shape index) file.\n");
+-  fprintf(f, "  -s, --no-schema     Don't output any schema, only the data.\n");
+-  fprintf(f, "  -n, --no-data       Don't output any data, only the schema.\n");
+-  fprintf(f, "  -t, --table         Table name to load records into.\n");
+-  fprintf(f, "  -q, --query         DBF query of form: \"FIELD=value\".\n");
+-  fprintf(f, "  -g, --geometry-field Name of GEOMETRY field, default `geo`.\n");
+-  fprintf(f, "  -o, --output        Output to a file, default stdout.\n");
+-  fprintf(f, "  -r, --remap         Remap a DBF column to a another name.\n");
+-  fprintf(f, "                      Expects `dbf_name=new_name' as an argument.\n");
++
++  fprintf(f, "\nInput Options:\n");
++  fprintf(f, "  -D, --no-dbf         Don't use a DBF (database) file.\n");
++  fprintf(f, "  -S, --no-shp         Don't use a SHP (shape) file, implies --no-shx.\n");
++  fprintf(f, "  -X, --no-shx         Don't use a SHX (shape index) file.\n");
++  
++  fprintf(f, "\nFilter Options:\n");
++  fprintf(f, "  -q, --query          DBF query of form: \"FIELD=value\".\n");
++  
++  fprintf(f, "\nDatabase Options:\n");
++  fprintf(f, "  -t, --table          Table name to load records into.\n");
++  fprintf(f, "  -r, --remap          Remap a DBF column to a another name.\n");
++  fprintf(f, "                       Expects `dbf_name=new_name' as an argument.\n");
++  fprintf(f, "  -a, --auto-increment-key\n"
++             "                       Name of auto-incremented primary key field (default `id').\n");
++  fprintf(f, "  -p, --primary-key    Name (after remap) of existing field to use as our primary key.\n");
++  fprintf(f, "  -g, --geometry-field Name of GEOMETRY field, default `geo` or `geo_as_text`.\n");
++  
++  fprintf(f, "\nOutput Options:\n");
++  fprintf(f, "  -o, --output         Output to a file, defaults to stdout.\n");
++  fprintf(f, "  -s, --no-schema      Don't output any schema, only the data.\n");
++  fprintf(f, "  -n, --no-data        Don't output any data, only the schema.\n");
++  fprintf(f, "  -i, --delimited      Output data in delimited format.\n"
++             "                       Implies --no-schema.\n");
++  fprintf(f, "  -G, --geometry-as-text\n"
++             "                       Output geometry as text rather than GEOMETRY.\n");
++
+   fprintf(f, "\n");
+   DBUG_VOID_RETURN;
+ }
+@@ -90,16 +113,25 @@
+   DBUG_RETURN(sql);
+ }
+ 
+-char *sql_field_name(DBF_FIELD *field, PAIRLIST *remap)
++
++char *sql_backquote(char * field_name)
+ {
+   static char sql[200];
+ 
+-  DBUG_ENTER("sql_field_name");
++  DBUG_ENTER("sql_backquote");
+   /* TODO: Need to do some cleanup of the field name. */
+-  sprintf(sql, "`%s`", pairlist_get_value(remap, field->name));
++  sprintf(sql, "`%s`", field_name);
+   DBUG_RETURN(sql);
+ }
+ 
++
++char *sql_field_name(DBF_FIELD *field, PAIRLIST *remap)
++{
++  DBUG_ENTER("sql_field_name");
++  DBUG_RETURN(sql_backquote(pairlist_get_value(remap, field->name)));
++}
++
++
+ char *sql_field_type(DBF_FIELD *field)
+ {
+   static char sql[200];
+@@ -116,10 +148,16 @@
+     sprintf(sql, "DATE NOT NULL");
+     break;
+   case NUMBER:
+-    sprintf(sql, "INT NOT NULL");
++    if (field->decimals)
++      sprintf(sql, "DOUBLE(%i,%i) NOT NULL", field->length, field->decimals);
++    else
++      if (field->length <= 9)
++        sprintf(sql, "INT(%i) NOT NULL", field->length);
++      else
++        sprintf(sql, "BIGINT(%i) NOT NULL", field->length);
+     break;
+   case FLOATING:
+-    sprintf(sql, "FLOAT NOT NULL");
++    sprintf(sql, "DOUBLE(%i,%i) NOT NULL", field->length, field->decimals);
+     break;
+   case LOGICAL:
+     sprintf(sql, "CHAR(1) NOT NULL");
+@@ -128,91 +166,222 @@
+   DBUG_RETURN(sql);
+ }
+ 
+-char *sql_field_value(DBF_FIELD *field, DBF_CELL *cell)
++/*
++  print str to f as a single quoted string. Single quotes
++  will be escaped as ''. For instance, "don't" becomes
++  "'don''t'"
++*/
++void print_single_quoted_string(FILE *f, char *str)
+ {
+-  static char sql[200];
++  int i;
+ 
+-  DBUG_ENTER("sql_field_value");
++  DBUG_ENTER("print_single_quoted_string");
+ 
++  fprintf(f, "'");
++
++  /* print characters in the string one by one */
++  for (i = 0; str[i] != '\0'; i++)
++    {
++      if (str[i] == '\'')
++        fprintf(f, "''");
++      else
++        fputc(str[i], f);
++    }
++  
++  fprintf(f, "'");
++
++  DBUG_VOID_RETURN;
++}
++
++/*
++  Print str as part of a delimited record (for the LOAD DATA INFILE
++  command). Escapes tab as \t, newline as \n, and backslash as \\
++*/
++void print_delimited_string(FILE *f, char *str)
++{
++  int i;
++ 
++  DBUG_ENTER("print_delimited_string");
++
++  /* print characters in the string one by one */
++  for (i = 0; str[i] != '\0'; i++)
++    {
++      if (str[i] == '\\')
++        fprintf(f, "\\\\");
++
++      else if (str[i] == '\t')
++        fprintf(f, "\\t");
++
++      else if (str[i] == '\n')
++        fprintf(f, "\\n");
++
++      else
++        fputc(str[i], f);
++     }
++  
++  DBUG_VOID_RETURN;
++}
++
++
++
++void print_sql_field_value(FILE *f, DBF_FIELD *field, DBF_CELL *cell,
++                           int opt_delimited)
++{
++  DBUG_ENTER("print_sql_field_value");
++
+   /* TODO: Need to escape the data for SQL. */
+ 
+-  if(!field || !cell) DBUG_RETURN(NULL);
+-		      
++  assert(field && cell);
++
+   switch(field->type) {
+   case CHARACTER:
+-    sprintf(sql, "\"%s\"", cell->data.character);
++    if (opt_delimited)
++      print_delimited_string(f, cell->data.character);
++    else
++      print_single_quoted_string(f, cell->data.character);
+     break;
++
+   case DATE:
+-    sprintf(sql, "\"%s\"", cell->data.date);
++    if (opt_delimited)
++      print_delimited_string(f, cell->data.date);
++    else
++      print_single_quoted_string(f, cell->data.date);
+     break;
++
+   case NUMBER:
+-    sprintf(sql, "%li", cell->data.number);
++    fprintf(f, cell->field->format, cell->data.number);
+     break;
++
+   case FLOATING:
+-    sprintf(sql, "%f", cell->data.floating);
++    fprintf(f, cell->field->format, cell->data.floating);
+     break;
++
+   case LOGICAL:
+-    sprintf(sql, "\"%c\"", cell->data.logical);
++    if (opt_delimited)
++      fprintf(f, "%c", cell->data.logical);
++    else
++      fprintf(f, "'%c'", cell->data.logical);
+     break;
+   }
+-  DBUG_RETURN(sql);
++
++  DBUG_VOID_RETURN;
+ }
+ 
+ void print_schema(FILE *f, SHAPEFILE *sha, 
+                   char *table_name, char *geometry_field,
+-		  PAIRLIST *remap)
++                  PAIRLIST *remap,
++                  char *auto_increment_key, char *primary_key,
++                  int opt_geometry_as_text)
+ {
+   DBF *dbf = sha->dbf;
+   DBF_FIELD *field;
+   int i;
+ 
++  char* primary_or_auto_increment_key = (auto_increment_key ? auto_increment_key : primary_key);
++
+   DBUG_ENTER("print_schema");
+ 
+   fprintf(f, "DROP TABLE IF EXISTS `%s`;\n", table_name);
+   fprintf(f, "CREATE TABLE `%s` (\n", table_name);
+-  fprintf(f, "  %-20s INT UNSIGNED NOT NULL auto_increment,\n", "`id`");
++  
++  if (auto_increment_key)
++    fprintf(f, "  %-20s INT UNSIGNED NOT NULL auto_increment,\n", sql_backquote(auto_increment_key));
+ 
++
+   if(sha->flags & SHAPEFILE_HAS_DBF) {
+     FOREACH_DBF_FIELD(dbf, field, i) {
+-      fprintf(f, "  %-20s %s,\n", sql_field_name(field, remap), sql_field_type(field));
++      fprintf(f, "  %-20s %s,\n", 
++              sql_field_name(field, remap), 
++              sql_field_type(field));
+     }
+   }
+ 
+   if(sha->flags & SHAPEFILE_HAS_SHP) {
+-    fprintf(f, "  %-20s GEOMETRY NOT NULL,\n", geometry_field);
+-    fprintf(f, "  PRIMARY KEY (id),\n");
+-    fprintf(f, "  SPATIAL INDEX (%s)\n", geometry_field);
+-  } else {
+-    fprintf(f, "  PRIMARY KEY (id)\n");
++    if (opt_geometry_as_text)
++      {
++        fprintf(f, "  %-20s MEDIUMTEXT NOT NULL,\n",
++                sql_backquote(geometry_field));
++      } else {
++        fprintf(f, "  %-20s GEOMETRY NOT NULL,\n",
++                sql_backquote(geometry_field));
++        fprintf(f, "  SPATIAL INDEX (%s),\n",
++                sql_backquote(geometry_field));
++      }
+   }
+ 
++  fprintf(f, "  PRIMARY KEY (%s)\n",
++          sql_backquote(primary_or_auto_increment_key));
++
+   fprintf(f, ");\n\n");
+ 
+   DBUG_VOID_RETURN;
+ }
+ 
+-void print_record(FILE *f, SHAPEFILE_RECORD *record, char *table_name)
++void print_record(FILE *f, SHAPEFILE_RECORD *record, char *table_name,
++                  char *auto_increment_key,
++                  int opt_delimited, int opt_geometry_as_text)
+ {
+   SHAPEFILE *sha = record->shapefile;
+   DBF_RECORD *dbf_record = record->dbf_record;
+   DBF_FIELD *field;
+   DBF_CELL *cell;
+   int i;
++  char *separator;
+ 
+   DBUG_ENTER("print_record");
+ 
+-  fprintf(f, "INSERT INTO `%s` VALUES (NULL", table_name);
++  if (opt_delimited)
++    separator = "\t";
++  else
++    separator = ", ";
++    
++
++
++  if (!opt_delimited)
++    fprintf(f, "INSERT INTO `%s` VALUES (", table_name);
++
++  /* dummy null value to fill in the auto-incremented field */
++  if (auto_increment_key) {
++    if (opt_delimited)
++      fprintf(f, "\\N");
++    else
++      fprintf(f, "NULL");
++  }
++  
+   if(sha->flags & SHAPEFILE_HAS_DBF) {
+     FOREACH_DBF_RECORD_FIELD_CELL(dbf_record, field, cell, i) {
+-      fprintf(f, ", %s", sql_field_value(field, cell));
++      
++      /* don't print a separator before the first record */
++      if (auto_increment_key || i != 0)
++        fprintf(f, "%s", separator);
++
++      print_sql_field_value(f, field, cell, opt_delimited);
+     }
+   }
++
+   if(sha->flags & SHAPEFILE_HAS_SHP) {
+-    fprintf(f, ", GEOMFROMTEXT(\"");
++    fprintf(f, "%s", separator);
++
++    /* convert to a MySQL geometry object */
++    if (!opt_geometry_as_text)
++      fprintf(f, "GEOMFROMTEXT(");
++
++    if (!opt_delimited)
++      fprintf(f, "'");
++
+     wkt_write(record->geometry, f);
+-    fprintf(f, "\")\n");
++    
++    if (!opt_delimited)
++      fprintf(f, "'");
++
++    if (!opt_geometry_as_text)    
++      fprintf(f, ")");
+   }
+-  fprintf(f, ");\n");
++  
++  if (!opt_delimited)
++    fprintf(f, "\n);");
++  
++  fprintf(f, "\n");
+ 
+   DBUG_VOID_RETURN;
+ }
+@@ -249,15 +418,21 @@
+   PAIRLIST *remap = NULL;
+   DBF_FIELD *field;
+   int i;
++  int filename_arg_index;
+ 
+   int opt, option_index;
+-  int opt_no_schema = 0;
+-  int opt_no_data   = 0;
++  int opt_no_schema        = 0;
++  int opt_no_data          = 0;
++  int opt_geometry_as_text = 0;
++  int opt_delimited    = 0;
+ 
+-  char *table_name = NULL;
+-  char *geometry_field = {"`geo`"};
++  char *table_name         = NULL;
++  char *geometry_field     = NULL;
++  char *auto_increment_key = NULL;
++  char *primary_key        = NULL;
++
+   char *query = NULL;
+-  char *ptr = NULL;
++  char *ptr   = NULL;
+ 
+   DBUG_ENTER("main");
+   DBUG_PROCESS(argv[0]);
+@@ -303,7 +478,7 @@
+     case 'o':
+       if(optarg[0] == '-' && optarg[1] == '\0') break;
+       if(!(output = fopen(optarg, "w"))) {
+-        fprintf(stderr, "Couldn't open output file `%s': Error %i: %s",
++        fprintf(stderr, "Couldn't open output file `%s': Error %i: %s\n",
+ 	        optarg, errno, strerror(errno));
+         goto err1;
+       break;
+@@ -313,10 +488,31 @@
+       *ptr++ = '\0';
+       pairlist_add(remap, optarg, ptr); 
+       break;
++    case 'a':
++      auto_increment_key = (char *)strdup(optarg);
++      break;
++    case 'p':
++      primary_key = (char *)strdup(optarg);
++      break;
++    case 'G':
++      opt_geometry_as_text++;
++      break;
++    case 'i':
++      opt_delimited++;
++      opt_no_schema++; /* can't output schema along with delimited format */
++      break;
+       }
+     }
+   }
++  
++  if(primary_key && auto_increment_key) {
++    fprintf(stderr, "You can't specify both --auto-increment-key and --primary-key at the same time.  \n");
++    goto err1;
++  }
+ 
++  /* validate arguments */
++
++  /* if there aren't any files specified */
+   if(optind == argc) {
+     usage(stderr);
+     ret = 1; goto err1;
+@@ -328,40 +524,75 @@
+     ret = 1; goto err1;
+   }
+ 
+-  if(!(sha = shapefile_init(shapefile_flags))) {
+-    fprintf(stderr, "Couldn't initialize, out of memory?\n");
+-    ret = 2; goto err1;
++  if (opt_delimited && !opt_geometry_as_text) {
++    fprintf(stderr, "ERROR: You must specify -G with -i \n(can't yet output raw MySQL GEOMETRY records)\n");
++    ret = 1; goto err1;
+   }
+ 
+-  if(shapefile_open(sha, argv[optind], 'r') < 0) {
+-    fprintf(stderr, "Couldn't open files, missing files?\n");
+-    ret = 3; goto err2;
++  if (auto_increment_key && primary_key) {
++    fprintf(stderr, "ERROR: You may specify -a or -p, but not both \n(can only have one primary key)\n");
++    ret = 1; goto err1;
+   }
+-  
+-  if(!table_name) table_name = (char *)strdup(basename(argv[optind]));
+ 
+-  if(sha->flags & SHAPEFILE_HAS_DBF) {
+-    FOREACH_DBF_FIELD(sha->dbf, field, i) {
+-      if(!pairlist_get(remap, field->name))
+-        pairlist_add(remap, field->name, field->name);
++  /* set defaults */
++
++  if (geometry_field == NULL)
++    {
++      geometry_field = (opt_geometry_as_text ? "geo_as_text" : "geo");
+     }
+-  }
+ 
+-  if(!opt_no_schema)
+-    print_schema(output, sha, table_name, geometry_field, remap);
++  if (!auto_increment_key && !primary_key)
++    {
++      auto_increment_key = "id";
++    }
+ 
+-  if(!opt_no_data) {
+-    if(query) {
+-      if(!(scan = scan_query(sha, query))) goto err3;
+-    } else {
+-      scan = shapefile_scan_init(sha, NULL, NULL, NULL);
++  /* open each shapefile and start processing */
++  
++  for (filename_arg_index = optind; 
++       filename_arg_index < argc; 
++       filename_arg_index++)
++    {
++
++      if(!(sha = shapefile_init(shapefile_flags))) {
++        fprintf(stderr, "Couldn't initialize, out of memory?\n");
++        ret = 2; goto err1;
++      }
++
++      if(shapefile_open(sha, argv[filename_arg_index], 'r') < 0) {
++        fprintf(stderr, "Couldn't open files, missing files?\n");
++        ret = 3; goto err2;
++      }
++  
++      if(!table_name) table_name = (char *)strdup(basename(argv[optind]));
++
++      if(sha->flags & SHAPEFILE_HAS_DBF) {
++        FOREACH_DBF_FIELD(sha->dbf, field, i) {
++          if(!pairlist_get(remap, field->name))
++            pairlist_add(remap, field->name, field->name);
++        }
++      }
++
++      /* if this is the first file, print out
++         a CREATE TABLE statement */
++      if(filename_arg_index == optind && !opt_no_schema)
++        print_schema(output, sha, table_name, geometry_field, remap, 
++                     auto_increment_key, primary_key, opt_geometry_as_text);
++
++      if(!opt_no_data) {
++        if(query) {
++          if(!(scan = scan_query(sha, query))) goto err3;
++        } else {
++          scan = shapefile_scan_init(sha, NULL, NULL, NULL);
++        }
++        while((rec = shapefile_scan_read_next(scan))) {
++          print_record(output, rec, table_name, auto_increment_key,
++                       opt_delimited, opt_geometry_as_text);
++          shapefile_record_free(rec);
++        } 
++        shapefile_scan_free(scan);
++      }
++
+     }
+-    while((rec = shapefile_scan_read_next(scan))) {
+-      print_record(output, rec, table_name);
+-      shapefile_record_free(rec);
+-    } 
+-    shapefile_scan_free(scan);
+-  }
+ 
+  err3:
+   shapefile_close(sha);
+Index: fixed.c
+===================================================================
+--- fixed.c	(revision 7)
++++ fixed.c	(working copy)
+@@ -307,7 +307,7 @@
+         printf("%s", cell->data.character);
+       break;
+     case NUMBER:
+-      printf("%li", cell->data.number);
++      printf("%f", cell->data.number);
+       break;
+     case FLOAT1MM:
+     case FLOATING:
+@@ -373,7 +373,7 @@
+     case NUMBER:
+       if(!(tmp = (char *)strndup(cur, field->length)))
+         goto oom;
+-      cell->data.number = atoi(tmp);
++      cell->data.number = atof(tmp);
+       free(tmp);
+       break;
+     case FLOAT1MM:
+Index: fixed.h
+===================================================================
+--- fixed.h	(revision 7)
++++ fixed.h	(working copy)
+@@ -89,10 +89,10 @@
+ 
+ typedef union fixed_cell_data_un {
+   char            *character;
+-  long int        number;
++  double        number;
+   char            logical;
+   char            *date;
+-  float           floating;
++  double           floating;
+ } FIXED_CELL_DATA;
+ 
+ typedef struct fixed_cell_st {
+Index: configure.in
+===================================================================
+--- configure.in	(revision 7)
++++ configure.in	(working copy)
+@@ -1,7 +1,7 @@
+ AC_INIT()
+ AC_CANONICAL_SYSTEM
+ 
+-AM_INIT_AUTOMAKE("mygis", "0.5.1")
++AM_INIT_AUTOMAKE("mygis", "0.5.5")
+ AM_CONFIG_HEADER(config.h)
+ 
+ AC_PROG_CC
+Index: dbf/dbf.h
+===================================================================
+--- dbf/dbf.h	(revision 7)
++++ dbf/dbf.h	(working copy)
+@@ -37,18 +37,40 @@
+ #define DBF_HDR_LENRECORD(x)       MYGIS_READ_UINT16_LE((x)+10)
+ #define DBF_HDR_RESERVED12(x)      MYGIS_READ_BYTE((x)+12)
+ #define DBF_HDR_RESERVED13(x)      MYGIS_READ_BYTE((x)+13)
+-#define DBF_HDR_IN_TRX(x)          MYGIS_READ_BYTE((x)+14)
++#define DBF_HDR_INCOMPLETE_TRX(x)  MYGIS_READ_BYTE((x)+14)
+ #define DBF_HDR_ENCRYPTED(x)       MYGIS_READ_BYTE((x)+15)
+ 
+ #define DBF_FLD_NAME(x)            ((char *)(x))
+ #define DBF_FLD_TYPE(x)            ((char)*((char *)(x)+11))
++#define DBF_FLD_ADDR(x)            MYGIS_READ_UINT32_LE((x)+12)
+ #define DBF_FLD_LEN(x)             MYGIS_READ_BYTE((x)+16)
++#define DBF_FLD_DECIMALS(x)        MYGIS_READ_BYTE((x)+17)
++#define DBF_FLD_RESERVED18(x)      MYGIS_READ_BYTE((x)+18)
++#define DBF_FLD_RESERVED19(x)      MYGIS_READ_BYTE((x)+19)
++#define DBF_FLD_WORKAREA(x)        MYGIS_READ_BYTE((x)+20)
++#define DBF_FLD_RESERVED21(x)      MYGIS_READ_BYTE((x)+21)
++#define DBF_FLD_RESERVED22(x)      MYGIS_READ_BYTE((x)+22)
++#define DBF_FLD_SETFIELDS(x)       MYGIS_READ_BYTE((x)+23)
++#define DBF_FLD_RESERVED24(x)      MYGIS_READ_BYTE((x)+24)
++#define DBF_FLD_RESERVED25(x)      MYGIS_READ_BYTE((x)+25)
++#define DBF_FLD_RESERVED26(x)      MYGIS_READ_BYTE((x)+26)
++#define DBF_FLD_RESERVED27(x)      MYGIS_READ_BYTE((x)+27)
++#define DBF_FLD_RESERVED28(x)      MYGIS_READ_BYTE((x)+28)
++#define DBF_FLD_RESERVED29(x)      MYGIS_READ_BYTE((x)+29)
++#define DBF_FLD_RESERVED30(x)      MYGIS_READ_BYTE((x)+30)
++#define DBF_FLD_INDEXFIELD(x)      MYGIS_READ_BYTE((x)+31)
+ 
+ #define DBF_POS_DATA(x)            DBF_HDR_LENHEADER(x)
+ 
+-#define DBF_FLD_STATUS_NORMAL      0x20
+-#define DBF_FLD_STATUS_DELETED     0x2a
++#define DBF_EOF                    0x1a  /* end of file */
+ 
++#define DBF_FLD_STATUS_NORMAL      0x20  /* space   ' ' */
++#define DBF_FLD_STATUS_DELETED     0x2a  /* asterix '*' */
++
++#define DBF_HAS_INCOMPLETE_TRX     0x01
++#define DBF_HAS_ENCRYPTED          0x01
++#define DBF_FLD_HAS_INDEX          0x01
++
+ #define FOREACH_DBF_FIELD(dbf, field, i) \
+   for(field=dbf->fields, i=0; \
+       i<dbf->numfields; \
+@@ -60,11 +82,11 @@
+       field++, cell++, i++)
+ 
+  /* Possible field types
+-    C = Character <254, check DBF_FLD_LEN for length
+-    N = Number (float), 10 or 19 bytes long, text
++    C = Character (char *) <254 bytes, check DBF_FLD_LEN for length
++    N = Number (double), 10 or 19 bytes long, text
+     L = Logical (char), ?, Y, y, N, n, T, t, F, f
+-    D = Date, 8 bytes long, YYYYMMDD
+-    F = Floating, 19 bytes long, text
++    D = Date (char *), 8 bytes long, YYYYMMDD
++    F = Floating (double), 19 bytes long, text
+     G = General, unsupported
+     M = Memo, unsupported
+     P = Picture, unsupported
+@@ -82,18 +104,20 @@
+ } DBF_FIELD_TYPE;
+ 
+ typedef struct dbf_field_st {
+-  char            name[11];
+-  DBF_FIELD_TYPE  type;
+-  byte            length;
+-  byte            size;
++  char            name[11];   /* name of field, max 10 characters plus null */
++  DBF_FIELD_TYPE  type;       /* type of field, as above */
++  byte            length;     /* digits before decimal point */
++  byte            decimals;   /* digits after decimal point */
++  byte            size;       /* total size to read from disk */
++  char            format[10]; /* printf-compatible format string */
+ } DBF_FIELD;
+ 
+ typedef union dbf_cell_data_un {
+   char            *character;
+-  long int        number;
++  double          number;
+   char            logical;
+   char            *date;
+-  float           floating;
++  double          floating;
+ } DBF_CELL_DATA;
+ 
+ typedef struct dbf_cell_st {
+@@ -148,7 +172,7 @@
+ void                dbf_free(DBF *dbf);
+ 
+ DBF_SCAN            *dbf_scan_init(DBF *dbf, COMPARE *compare,
+-				   char *key, char *value);
++                                   char *key, char *value);
+ int                 dbf_scan_next(DBF_SCAN *scan);
+ DBF_RECORD          *dbf_scan_read_next(DBF_SCAN *scan);
+ void                dbf_scan_free(DBF_SCAN *scan);
+Index: dbf/dbf_read.c
+===================================================================
+--- dbf/dbf_read.c	(revision 7)
++++ dbf/dbf_read.c	(working copy)
+@@ -68,21 +68,29 @@
+ 
+     strncpy(field->name, DBF_FLD_NAME(temp), 10);
+     field->name[10] = '\0';
+-    field->type   = DBF_FLD_TYPE(temp);
+-    field->length = DBF_FLD_LEN(temp);
++    field->type     = DBF_FLD_TYPE(temp);
++    field->length   = DBF_FLD_LEN(temp);
++    field->decimals = DBF_FLD_DECIMALS(temp);
++    field->format[0]= '\0';
+     switch(field->type) {
+     case CHARACTER:
++      dbf->record_length += field->size = field->length;
++      strcpy(field->format, "%s");
++      break;
+     case NUMBER:
+     case FLOATING:
+       dbf->record_length += field->size = field->length;
++      sprintf(field->format, "%%.%if", field->decimals);
+       break;
+ 
+     case LOGICAL:
+       dbf->record_length += field->size = 1;
++      strcpy(field->format, "%c");
+       break;
+       
+     case DATE:
+-      dbf->record_length += field->size = 8; 
++      dbf->record_length += field->size = 8;
++      strcpy(field->format, "%8s");
+       break;
+ 
+     case GENERAL:
+@@ -121,7 +129,7 @@
+   buf = cur = memset(dbf->record_buffer, 0, dbf->record_length+1);
+ 
+   if((count=read(dbf->fd, buf, dbf->record_length+1)) < dbf->record_length+1) {
+-    if(count == 1 && buf[0] == 0x1a) {
++    if(count == 1 && buf[0] == DBF_EOF) {
+       goto endoffile;
+     }
+     fprintf(stderr, "DBF: Error reading record: read only %i bytes, expected %i bytes\n", count, dbf->record_length+1);
+@@ -146,12 +154,7 @@
+       if(!(cell->data.date = (char *)strndup(cur, field->size)))
+         goto oom;
+       break;
+-    case NUMBER:
+-      if(!(tmp = (char *)strndup(cur, field->size)))
+-        goto oom;
+-      cell->data.number = atoi(tmp);
+-      free(tmp);
+-      break;
++    case NUMBER: /* "NUMBER" is a floating point number too! */
+     case FLOATING:
+       if(!(tmp = (char *)strndup(cur, field->size)))
+         goto oom;
+Index: dbf/dbf.c
+===================================================================
+--- dbf/dbf.c	(revision 7)
++++ dbf/dbf.c	(working copy)
+@@ -121,8 +121,9 @@
+   printf("    position:       %i\n", dbf->position);
+   printf("  Fields:\n");
+   for(field = dbf->fields, i=0; i<dbf->numfields; field++, i++) {
+-    printf("    Field %3i:  Name %-10s  Type %c  Length %i\n",
+-	   i, field->name, field->type, field->length);
++    printf("    Field %3i:  Name %-10s  Type %c  Length %3i  Decimals %2i  Format %s\n",
++	   i, field->name, field->type, field->length, field->decimals,
++	   field->format);
+   }
+   printf("\n\n");
+ 
+@@ -141,21 +142,22 @@
+     printf("  %10s: ", field->name);
+     switch(field->type) {
+     case CHARACTER:
+-      printf("%s\n", cell->data.character);
++      printf(cell->field->format, cell->data.character);
+       break;
+     case DATE:
+-      printf("%s\n", cell->data.date);
++      printf(cell->field->format, cell->data.date);
+       break;
+     case NUMBER:
+-      printf("%li\n", cell->data.number);
++      printf(cell->field->format, cell->data.number);
+       break;
+     case FLOATING:
+-      printf("%f\n", cell->data.floating);
++      printf(cell->field->format, cell->data.floating);
+       break;
+     case LOGICAL:
+-      printf("%c\n", cell->data.logical);
++      printf(cell->field->format, cell->data.logical);
+       break;
+     }
++    printf("\n");
+   }
+ 
+   DBUG_VOID_RETURN;
+Index: mygis.c
+===================================================================
+--- mygis.c	(revision 7)
++++ mygis.c	(working copy)
+@@ -27,7 +27,11 @@
+ #endif
+ 
+ const char *mygis_version   = { "libmygis " VERSION DEBUG_STRING };
+-const char *mygis_copyright = { "Copyright (c) 2004-2005, Jeremy Cole." };
++const char *mygis_copyright = {
++  "Copyright:\n"
++  "  (c) 2004-2005, Jeremy Cole\n"
++  "  (c)      2005, Wavemarket, Inc.\n"
++};
+ const char *mygis_license   = { "LGPL - Lesser (Library) General Public License" };
+ 
+ inline uint16 mygis_swap_uint16(uint16 in) {

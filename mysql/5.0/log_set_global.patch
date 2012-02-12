@@ -1,0 +1,103 @@
+diff -Nru mysql-5.0/sql/mysql_priv.h mysql.new/sql/mysql_priv.h
+--- mysql-5.0/sql/mysql_priv.h	2007-01-03 16:42:09.000000000 -0800
++++ mysql.new/sql/mysql_priv.h	2007-01-11 11:45:47.000000000 -0800
+@@ -1248,6 +1248,7 @@
+ extern bool using_update_log, opt_large_files, server_id_supplied;
+ extern bool opt_log, opt_update_log, opt_bin_log, opt_slow_log, opt_error_log;
+ extern my_bool opt_log_queries_not_using_indexes;
++extern my_bool opt_log_set_global_statements;
+ extern bool opt_disable_networking, opt_skip_show_db;
+ extern my_bool opt_character_set_client_handshake;
+ extern bool volatile abort_loop, shutdown_in_progress, grant_option;
+diff -Nru mysql-5.0/sql/mysqld.cc mysql.new/sql/mysqld.cc
+--- mysql-5.0/sql/mysqld.cc	2007-01-03 16:42:10.000000000 -0800
++++ mysql.new/sql/mysqld.cc	2007-01-11 11:45:47.000000000 -0800
+@@ -334,6 +334,7 @@
+ 
+ bool opt_log, opt_update_log, opt_bin_log, opt_slow_log;
+ my_bool opt_log_queries_not_using_indexes= 0;
++my_bool opt_log_set_global_statements=0;
+ bool opt_error_log= IF_WIN(1,0);
+ bool opt_disable_networking=0, opt_skip_show_db=0;
+ my_bool opt_character_set_client_handshake= 1;
+@@ -4692,7 +4693,8 @@
+   OPT_TABLE_LOCK_WAIT_TIMEOUT,
+   OPT_PORT_OPEN_TIMEOUT,
+   OPT_MERGE,
+-  OPT_INNODB_ROLLBACK_ON_TIMEOUT
++  OPT_INNODB_ROLLBACK_ON_TIMEOUT,
++  OPT_LOG_SET_GLOBAL_STATEMENTS
+ };
+ 
+ 
+@@ -5046,6 +5048,10 @@
+    "Log queries that are executed without benefit of any index to the slow log if it is open.",
+    (gptr*) &opt_log_queries_not_using_indexes, (gptr*) &opt_log_queries_not_using_indexes,
+    0, GET_BOOL, NO_ARG, 0, 0, 0, 0, 0, 0},
++  {"log-set-global-statements", OPT_LOG_SET_GLOBAL_STATEMENTS,
++   "Write statements that change GLOBAL variables to stderr.",
++   (gptr*)&opt_log_set_global_statements, (gptr*)&opt_log_set_global_statements,
++   0, GET_BOOL, NO_ARG, 0, 0, 0, 0, 0, 0},
+   {"log-short-format", OPT_SHORT_LOG_FORMAT,
+    "Don't log extra information to update and slow-query logs.",
+    (gptr*) &opt_short_log_format, (gptr*) &opt_short_log_format,
+diff -Nru mysql-5.0/sql/set_var.cc mysql.new/sql/set_var.cc
+--- mysql-5.0/sql/set_var.cc	2007-01-03 16:42:11.000000000 -0800
++++ mysql.new/sql/set_var.cc	2007-01-15 12:02:45.000000000 -0800
+@@ -213,6 +213,10 @@
+ sys_var_bool_ptr
+   sys_log_queries_not_using_indexes("log_queries_not_using_indexes",
+                                     &opt_log_queries_not_using_indexes);
++
++sys_var_bool_ptr sys_log_set_global_statements("log_set_global_statements",
++									&opt_log_set_global_statements);
++
+ sys_var_thd_ulong	sys_log_warnings("log_warnings", &SV::log_warnings);
+ sys_var_thd_ulong	sys_long_query_time("long_query_time",
+ 					     &SV::long_query_time);
+@@ -657,6 +661,7 @@
+   &sys_log_binlog,
+   &sys_log_off,
+   &sys_log_queries_not_using_indexes,
++  &sys_log_set_global_statements,
+   &sys_log_update,
+   &sys_log_warnings,
+   &sys_long_query_time,
+@@ -935,6 +940,7 @@
+   {"log_error",               (char*) log_error_file,               SHOW_CHAR},
+   {sys_log_queries_not_using_indexes.name,
+     (char*) &sys_log_queries_not_using_indexes, SHOW_SYS},
++  {sys_log_set_global_statements.name, (char*)&sys_log_set_global_statements, SHOW_SYS},
+ #ifdef HAVE_REPLICATION
+   {"log_slave_updates",       (char*) &opt_log_slave_updates,       SHOW_MY_BOOL},
+ #endif
+@@ -3191,7 +3199,28 @@
+     my_error(ER_WRONG_TYPE_FOR_VAR, MYF(0), var->name);
+     return -1;
+   }
+-  return var->check(thd, this) ? -1 : 0;
++  
++  
++  if (var->check(thd,this)) 
++    return -1;
++  
++/*
++  Log 'SET GLOBAL' statements:
++  If 'opt_log_set_global_statements' is in effect (or is the option
++  being changed) then log this statement to the server output.
++*/
++  
++  if (type == OPT_GLOBAL && (opt_log_set_global_statements || 
++                             var->name == "log_set_global_statements")) 
++  { 
++    sql_print_information("Global variable changed: %s; thread_id: %u, %s@%s",
++			  thd->query,
++			  thd->thread_id,
++			  thd->security_ctx->user,
++			  thd->security_ctx->host);
++  }
++  			
++  return 0;	
+ }
+ 
+ 

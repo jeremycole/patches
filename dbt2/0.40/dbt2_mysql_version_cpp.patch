@@ -1,0 +1,19 @@
+--- dbt2-0.40.orig/acinclude.m4	2007-01-15 14:40:12.000000000 -0800
++++ dbt2-0.40/acinclude.m4	2010-07-19 18:50:35.000000000 -0700
+@@ -153,6 +153,7 @@
+       if test [ -z "$ac_cv_mysql_includes" ]
+       then
+         MYSQL_CFLAGS=`${mysqlconfig} --cflags| tr -d \'`
++        MYSQL_INCLUDE=`${mysqlconfig} --include`
+       fi
+       if test [ -z "$ac_cv_mysql_libs" ]
+       then
+@@ -173,7 +174,7 @@
+ AC_MSG_CHECKING(Version of MySQL headers)
+ 
+ MYSQL_VER=`(echo '#include <mysql_version.h>'; echo MYSQL_VERSION_ID ) \
+-    | cpp -P $MYSQL_CFLAGS`
++    | cpp -P $MYSQL_INCLUDE | grep -v '^\$'`
+ 
+ AC_MSG_RESULT($MYSQL_VER)
+ 

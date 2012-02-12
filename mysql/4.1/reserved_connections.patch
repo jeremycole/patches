@@ -1,0 +1,112 @@
+===== sql/mysql_priv.h 1.368 vs edited =====
+--- 1.368/sql/mysql_priv.h	2005-09-30 04:21:34 -07:00
++++ edited/sql/mysql_priv.h	2005-10-21 16:07:12 -07:00
+@@ -914,6 +914,7 @@
+ extern ulong ha_read_rnd_count, ha_read_rnd_next_count, ha_discover_count;
+ extern ulong ha_commit_count, ha_rollback_count,table_cache_size;
+ extern ulong max_connections,max_connect_errors, connect_timeout;
++extern ulong reserved_connections;
+ extern ulong slave_net_timeout, slave_trans_retries;
+ extern ulong max_user_connections;
+ extern ulong long_query_count, what_to_log,flush_time;
+===== sql/mysqld.cc 1.604 vs edited =====
+--- 1.604/sql/mysqld.cc	2005-10-18 09:45:09 -07:00
++++ edited/sql/mysqld.cc	2005-10-21 19:01:03 -07:00
+@@ -336,6 +336,7 @@
+ ulong binlog_cache_use= 0, binlog_cache_disk_use= 0;
+ ulong max_connections,max_used_connections,
+       max_connect_errors, max_user_connections = 0;
++ulong reserved_connections;
+ ulong thread_id=1L,current_pid;
+ ulong slow_launch_threads = 0, sync_binlog_period;
+ ulong expire_logs_days = 0;
+@@ -3521,7 +3522,9 @@
+     net->return_errno=1;
+ 
+   /* don't allow too many connections */
+-  if (thread_count - delayed_insert_threads >= max_connections+1 || abort_loop)
++  if (thread_count - delayed_insert_threads >= 
++        (max_connections + reserved_connections)
++        || abort_loop)
+   {
+     DBUG_PRINT("error",("Too many connections"));
+     close_connection(thd, ER_CON_COUNT_ERROR, 1);
+@@ -4247,6 +4250,7 @@
+   OPT_QUERY_CACHE_LIMIT, OPT_QUERY_CACHE_MIN_RES_UNIT, OPT_QUERY_CACHE_SIZE,
+   OPT_QUERY_CACHE_TYPE, OPT_QUERY_CACHE_WLOCK_INVALIDATE, OPT_RECORD_BUFFER,
+   OPT_RECORD_RND_BUFFER, OPT_RELAY_LOG_SPACE_LIMIT, OPT_RELAY_LOG_PURGE,
++  OPT_RESERVED_CONNECTIONS,
+   OPT_SLAVE_NET_TIMEOUT, OPT_SLAVE_COMPRESSED_PROTOCOL, OPT_SLOW_LAUNCH_TIME,
+   OPT_SLAVE_TRANS_RETRIES, OPT_READONLY, OPT_DEBUGGING,
+   OPT_SORT_BUFFER, OPT_TABLE_CACHE,
+@@ -5388,6 +5392,11 @@
+    (gptr*) &relay_log_space_limit,
+    (gptr*) &relay_log_space_limit, 0, GET_ULL, REQUIRED_ARG, 0L, 0L,
+    (longlong) ULONG_MAX, 0, 1, 0},
++  {"reserved_connections", OPT_RESERVED_CONNECTIONS,
++   "The number of connections to reserved for SUPER users.",
++   (gptr*) &reserved_connections,
++   (gptr*) &reserved_connections, 0, GET_ULONG, REQUIRED_ARG, 1, 1, 32, 0, 1,
++   0},
+   {"slave_compressed_protocol", OPT_SLAVE_COMPRESSED_PROTOCOL,
+    "Use compression on master/slave protocol.",
+    (gptr*) &opt_slave_compressed_protocol,
+===== sql/set_var.cc 1.178 vs edited =====
+--- 1.178/sql/set_var.cc	2005-09-20 15:18:26 -07:00
++++ edited/sql/set_var.cc	2005-10-21 18:44:08 -07:00
+@@ -286,6 +286,9 @@
+ sys_var_bool_ptr	sys_relay_log_purge("relay_log_purge",
+                                             &relay_log_purge);
+ #endif
++sys_var_long_ptr	sys_reserved_connections("reserved_connections",
++                                           &reserved_connections,
++                                           fix_max_connections);
+ sys_var_long_ptr	sys_rpl_recovery_rank("rpl_recovery_rank",
+ 					      &rpl_recovery_rank);
+ sys_var_long_ptr	sys_query_cache_size("query_cache_size",
+@@ -609,6 +612,7 @@
+ #ifdef HAVE_REPLICATION
+   &sys_relay_log_purge,
+ #endif
++  &sys_reserved_connections,
+   &sys_rpl_recovery_rank,
+   &sys_safe_updates,
+   &sys_secure_auth,
+@@ -862,6 +866,8 @@
+   {sys_relay_log_purge.name,  (char*) &sys_relay_log_purge,         SHOW_SYS},
+   {"relay_log_space_limit",  (char*) &relay_log_space_limit,        SHOW_LONGLONG},
+ #endif
++  {sys_reserved_connections.name,  (char*) &sys_reserved_connections,
++   SHOW_SYS},
+   {sys_rpl_recovery_rank.name,(char*) &sys_rpl_recovery_rank,       SHOW_SYS},
+   {"secure_auth",             (char*) &sys_secure_auth,             SHOW_SYS},
+ #ifdef HAVE_SMEM
+@@ -1222,8 +1228,8 @@
+ static void fix_max_connections(THD *thd, enum_var_type type)
+ {
+ #ifndef EMBEDDED_LIBRARY
+-  resize_thr_alarm(max_connections + 
+-		   global_system_variables.max_insert_delayed_threads + 10);
++  resize_thr_alarm(10 + max_connections + reserved_connections +
++		   global_system_variables.max_insert_delayed_threads);
+ #endif
+ }
+ 
+===== sql/set_var.h 1.59 vs edited =====
+--- 1.59/sql/set_var.h	2005-07-15 12:43:48 -07:00
++++ edited/sql/set_var.h	2005-10-21 18:43:39 -07:00
+@@ -734,6 +734,14 @@
+   virtual void set_default(THD *thd, enum_var_type type);
+ };
+ 
++class sys_var_reserved_connections :public sys_var_long_ptr
++{
++public:
++  sys_var_reserved_connections(const char *name_arg, ulong *value_ptr)
++    :sys_var_long_ptr(name_arg, value_ptr) {}
++};
++
++
+ /****************************************************************************
+   Classes for parsing of the SET command
+ ****************************************************************************/

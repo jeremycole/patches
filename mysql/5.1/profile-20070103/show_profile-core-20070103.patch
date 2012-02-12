@@ -1,0 +1,1043 @@
+--- sql/Makefile.am.orig	2006-04-25 15:02:29.000000000 -0700
++++ sql/Makefile.am	2006-04-25 16:21:05.000000000 -0700
+@@ -80,6 +80,7 @@
+ 			set_var.cc sql_parse.cc sql_yacc.yy \
+ 			sql_base.cc table.cc sql_select.cc sql_insert.cc \
+                         sql_prepare.cc sql_error.cc \
++      sql_profile.cc \
+ 			sql_update.cc sql_delete.cc uniques.cc sql_do.cc \
+ 			procedure.cc item_uniq.cc sql_test.cc \
+ 			log.cc log_event.cc init.cc derror.cc sql_acl.cc \
+@@ -109,7 +110,8 @@
+ 			ha_blackhole.h  ha_federated.h  ha_ndbcluster.h \
+ 			ha_ndbcluster_binlog.cc ha_ndbcluster_binlog.h \
+ 			ha_ndbcluster_tables.h \
+-			ha_partition.cc ha_partition.h
++			ha_partition.cc ha_partition.h \
++			sql_profile.h
+ mysqld_DEPENDENCIES =	@mysql_se_objs@
+ gen_lex_hash_SOURCES =	gen_lex_hash.cc
+ gen_lex_hash_LDADD =	$(LDADD) $(CXXLDFLAGS)
+--- sql/lex.h.orig	2006-04-25 15:02:31.000000000 -0700
++++ sql/lex.h	2006-04-25 16:10:46.000000000 -0700
+@@ -92,6 +92,7 @@
+   { "BINLOG",		SYM(BINLOG_SYM)},
+   { "BIT",		SYM(BIT_SYM)},
+   { "BLOB",		SYM(BLOB_SYM)},
++  { "BLOCK",  SYM(BLOCK_SYM)},
+   { "BOOL",		SYM(BOOL_SYM)},
+   { "BOOLEAN",		SYM(BOOLEAN_SYM)},
+   { "BOTH",		SYM(BOTH)},
+@@ -132,8 +133,10 @@
+   { "CONSISTENT",	SYM(CONSISTENT_SYM)},
+   { "CONSTRAINT",	SYM(CONSTRAINT)},
+   { "CONTAINS",         SYM(CONTAINS_SYM)},
++  { "CONTEXT",    SYM(CONTEXT_SYM)},
+   { "CONTINUE",         SYM(CONTINUE_SYM)},
+   { "CONVERT",		SYM(CONVERT_SYM)},
++  { "CPU",        SYM(CPU_SYM)},
+   { "CREATE",		SYM(CREATE)},
+   { "CROSS",		SYM(CROSS)},
+   { "CUBE",		SYM(CUBE_SYM)},
+@@ -205,6 +208,7 @@
+   { "EXTENT_SIZE",	SYM(EXTENT_SIZE_SYM)},
+   { "FALSE",		SYM(FALSE_SYM)},
+   { "FAST",		SYM(FAST_SYM)},
++  { "FAULTS",  SYM(FAULTS_SYM)},
+   { "FETCH",            SYM(FETCH_SYM)},
+   { "FIELDS",		SYM(COLUMNS)},
+   { "FILE",		SYM(FILE_SYM)},
+@@ -266,7 +270,9 @@
+   { "INTEGER",		SYM(INT_SYM)},
+   { "INTERVAL",		SYM(INTERVAL_SYM)},
+   { "INTO",		SYM(INTO)},
++  { "IO",     SYM(IO_SYM)},
+   { "IO_THREAD",        SYM(RELAY_THREAD)},
++  { "IPC",    SYM(IPC_SYM)},
+   { "IS",		SYM(IS)},
+   { "ISOLATION",	SYM(ISOLATION)},
+   { "ISSUER",		SYM(ISSUER_SYM)},
+@@ -381,6 +387,7 @@
+   { "OUTER",		SYM(OUTER)},
+   { "OUTFILE",		SYM(OUTFILE)},
+   { "PACK_KEYS",	SYM(PACK_KEYS_SYM)},
++  { "PAGE",       SYM(PAGE_SYM)},
+   { "PARSER",           SYM(PARSER_SYM)},
+   { "PARTIAL",		SYM(PARTIAL)},
+ #ifdef WITH_PARTITION_STORAGE_ENGINE
+@@ -403,6 +410,8 @@
+   { "PROCEDURE",	SYM(PROCEDURE)},
+   { "PROCESS"	,	SYM(PROCESS)},
+   { "PROCESSLIST",	SYM(PROCESSLIST_SYM)},
++  { "PROFILE",    SYM(PROFILE_SYM)},
++  { "PROFILES",   SYM(PROFILES_SYM)},
+   { "PURGE",		SYM(PURGE)},
+   { "QUARTER",          SYM(QUARTER_SYM)},
+   { "QUERY",		SYM(QUERY_SYM)},
+@@ -475,6 +484,7 @@
+   { "SOME",             SYM(ANY_SYM)},
+   { "SONAME",		SYM(SONAME_SYM)},
+   { "SOUNDS",		SYM(SOUNDS_SYM)},
++  { "SOURCE",   SYM(SOURCE_SYM)},
+   { "SPATIAL",		SYM(SPATIAL_SYM)},
+   { "SPECIFIC",         SYM(SPECIFIC_SYM)},
+   { "SQL",              SYM(SQL_SYM)},
+@@ -511,6 +521,8 @@
+   { "SUBPARTITIONS",    SYM(SUBPARTITIONS_SYM)},
+   { "SUPER",		SYM(SUPER_SYM)},
+   { "SUSPEND",          SYM(SUSPEND_SYM)},
++  { "SWAPS",      SYM(SWAPS_SYM)},
++  { "SWITCHES",   SYM(SWITCHES_SYM)},
+   { "TABLE",		SYM(TABLE_SYM)},
+   { "TABLES",		SYM(TABLES)},
+   { "TABLESPACE",	SYM(TABLESPACE)},
+--- sql/mysql_priv.h.orig	2006-04-25 15:02:31.000000000 -0700
++++ sql/mysql_priv.h	2006-04-25 16:20:30.000000000 -0700
+@@ -129,6 +129,8 @@
+ #define BDB_LOG_ALLOC_BLOCK_SIZE	1024
+ #define WARN_ALLOC_BLOCK_SIZE		2048
+ #define WARN_ALLOC_PREALLOC_SIZE	1024
++#define PROFILE_ALLOC_BLOCK_SIZE  2048
++#define PROFILE_ALLOC_PREALLOC_SIZE 1024
+ 
+ /*
+   The following parameters is to decide when to use an extra cache to
+@@ -509,6 +511,7 @@
+ #include "sql_plugin.h"
+ #include "sql_udf.h"
+ #include "sql_partition.h"
++#include "sql_profile.h"
+ 
+ class user_var_entry;
+ class Security_context;
+--- sql/sql_class.cc.orig	2006-04-25 15:02:32.000000000 -0700
++++ sql/sql_class.cc	2006-04-25 16:10:47.000000000 -0700
+@@ -274,6 +274,7 @@
+   init();
+   /* Initialize sub structures */
+   init_sql_alloc(&warn_root, WARN_ALLOC_BLOCK_SIZE, WARN_ALLOC_PREALLOC_SIZE);
++  profiling.set_thd(this);
+   user_connect=(USER_CONN *)0;
+   hash_init(&user_vars, system_charset_info, USER_VARS_HASH_SIZE, 0, 0,
+ 	    (hash_get_key) get_var_key,
+@@ -355,6 +356,7 @@
+                       variables.trans_alloc_block_size,
+                       variables.trans_prealloc_size);
+ #endif
++  profiling.reset();
+   transaction.xid_state.xid.null();
+   transaction.xid_state.in_thd=1;
+ }
+--- sql/sql_class.h.orig	2006-04-25 15:02:32.000000000 -0700
++++ sql/sql_class.h	2006-04-25 16:10:47.000000000 -0700
+@@ -1083,6 +1083,9 @@
+   List	     <MYSQL_ERROR> warn_list;
+   uint	     warn_count[(uint) MYSQL_ERROR::WARN_LEVEL_END];
+   uint	     total_warn_count;
++  
++  PROFILING  profiling;
++
+   /*
+     Id of current query. Statement can be reused to execute several queries
+     query_id is global in context of the whole MySQL server.
+--- sql/sql_lex.cc.orig	2006-04-25 15:02:32.000000000 -0700
++++ sql/sql_lex.cc	2006-04-25 18:24:04.000000000 -0700
+@@ -179,6 +179,8 @@
+   lex->proc_list.first= 0;
+   lex->query_tables_own_last= 0;
+   lex->escape_used= lex->et_compile_phase= FALSE;
++  lex->profile_options= PROFILE_NONE;
++  lex->profile_query_id  = 0;
+ 
+   lex->name= 0;
+   lex->et= NULL;
+--- sql/sql_lex.h.orig	2006-04-25 15:02:32.000000000 -0700
++++ sql/sql_lex.h	2006-04-25 18:23:44.000000000 -0700
+@@ -112,6 +112,7 @@
+   SQLCOM_SHOW_PLUGINS,
+   SQLCOM_CREATE_EVENT, SQLCOM_ALTER_EVENT, SQLCOM_DROP_EVENT,
+   SQLCOM_SHOW_CREATE_EVENT, SQLCOM_SHOW_EVENTS,
++  SQLCOM_SHOW_PROFILE, SQLCOM_SHOW_PROFILES,
+ 
+   /* This should be the last !!! */
+ 
+@@ -867,6 +868,8 @@
+   enum enum_var_type option_type;
+   enum enum_view_create_mode create_view_mode;
+   enum enum_drop_mode drop_mode;
++  uint profile_options;
++  uint profile_query_id;
+   uint uint_geom_type;
+   uint grant, grant_tot_col, which_columns;
+   uint fk_delete_opt, fk_update_opt, fk_match_option;
+--- sql/sql_parse.cc.orig	2006-04-25 15:02:33.000000000 -0700
++++ sql/sql_parse.cc	2006-04-25 18:23:01.000000000 -0700
+@@ -2596,6 +2595,24 @@
+ 			      (1L << (uint) MYSQL_ERROR::WARN_LEVEL_ERROR));
+     break;
+   }
++  case SQLCOM_SHOW_PROFILES:
++  {
++    thd->profiling.store();
++    thd->profiling.discard();
++    res= thd->profiling.show_profiles();
++    break;
++  }
++  case SQLCOM_SHOW_PROFILE:
++  {
++    thd->profiling.store();
++    thd->profiling.discard(); // will get re-enabled by reset()
++    if(lex->profile_query_id) {
++      res= thd->profiling.show(lex->profile_options, lex->profile_query_id);
++    } else {
++      res= thd->profiling.show_last(lex->profile_options);
++    }
++    break;
++  }
+   case SQLCOM_SHOW_NEW_MASTER:
+   {
+     if (check_global_access(thd, REPL_SLAVE_ACL))
+--- /dev/null	2007-01-03 09:44:32.000000000 -0800
++++ sql/sql_profile.cc	2006-04-26 12:09:07.000000000 -0700
+@@ -0,0 +1,440 @@
++/* Copyright (C) 2005 MySQL AB
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 2 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA */
++
++#include "mysql_priv.h"
++#include "sp_rcontext.h"
++
++#define RUSAGE_USEC(tv)  ((tv).tv_sec*1000000 + (tv).tv_usec)
++#define RUSAGE_DIFF_USEC(tv1, tv2) (RUSAGE_USEC((tv1))-RUSAGE_USEC((tv2)))
++
++PROFILE_ENTRY::PROFILE_ENTRY()
++  :status(NULL), time(0), function(NULL), file(NULL), line(0)
++{
++  collect();
++}
++
++PROFILE_ENTRY::PROFILE_ENTRY(PROFILE *profile_arg, const char *status_arg)
++  :profile(profile_arg), function(NULL), file(NULL), line(0)
++{
++  collect();
++  if (status_arg)
++    set_status(status_arg);
++}
++
++PROFILE_ENTRY::PROFILE_ENTRY(PROFILE *profile_arg, const char *status_arg,
++                             const char *function_arg,
++                             const char *file_arg, unsigned int line_arg)
++  :profile(profile_arg)
++{
++  collect();
++  if (status_arg)
++    set_status(status_arg);
++  if (function_arg)
++    function= strdup_root(&profile->profiling->root, function_arg);
++  if (file_arg)
++    file= strdup_root(&profile->profiling->root, file_arg);
++  line= line_arg;
++}
++
++PROFILE_ENTRY::~PROFILE_ENTRY()
++{
++  if (status)
++    free(status);
++  if (function)
++    free(function);
++  if (file)
++    free(file);
++}
++  
++void PROFILE_ENTRY::set_status(const char *status_arg)
++{
++  status= strdup_root(&profile->profiling->root, status_arg);
++}
++
++void PROFILE_ENTRY::collect()
++{
++  time= my_getsystime();
++  getrusage(RUSAGE_SELF, &rusage);
++}
++
++PROFILE::PROFILE(PROFILING *profiling_arg)
++  :profiling(profiling_arg)
++{
++  profile_end= &profile_start;
++}
++
++PROFILE::~PROFILE()
++{
++  entries.empty();
++}
++
++void PROFILE::status(const char *status_arg,
++                     const char *function_arg=NULL,
++                     const char *file_arg=NULL, unsigned int line_arg=0)
++{
++  PROFILE_ENTRY *prof= NULL;
++  MEM_ROOT *old_root= NULL;
++  THD *thd= profiling->thd;
++
++  DBUG_ENTER("PROFILE::status");
++
++  /* Blank status.  Just return, and thd->proc_info will be set blank later. */
++  if (unlikely(!status_arg))
++    DBUG_VOID_RETURN;
++
++  /* If thd->proc_info is currently set to status_arg, don't profile twice. */
++  if (unlikely(thd->proc_info && !(strcmp(thd->proc_info, status_arg))))
++    DBUG_VOID_RETURN;
++
++  /* Is this the same query as our profile currently contains? */
++  if (unlikely(thd->query_id != query_id && !thd->spcont))
++    reset();
++    
++  /*
++    In order to keep the profile information between queries (i.e. from
++    SELECT to the following SHOW PROFILE command) the following code is
++    necessary to keep the profile from getting freed automatically when
++    mysqld cleans up after the query.  This code is shamelessly stolen
++    from SHOW WARNINGS.
++    
++    The thd->mem_root structure is freed after each query is completed,
++    so temporarily override it.
++  */
++  old_root= thd->mem_root;
++  thd->mem_root= &profiling->root;
++  if (function_arg && file_arg) {
++    if ((profile_end= prof= new PROFILE_ENTRY(this, status_arg, function_arg, file_arg, line_arg)))
++      entries.push_back(prof);
++  } else {
++    if ((profile_end= prof= new PROFILE_ENTRY(this, status_arg)))
++      entries.push_back(prof);
++  }
++  thd->mem_root= old_root;
++
++  DBUG_VOID_RETURN;
++}
++
++void PROFILE::reset()
++{
++  DBUG_ENTER("PROFILE::reset");
++  if (profiling->thd->query_id != query_id)
++  {
++    query_id= profiling->thd->query_id;
++    profile_start.collect();
++    entries.empty();
++  }
++  DBUG_VOID_RETURN;
++}
++
++bool PROFILE::show(uint options)
++{  
++  PROFILE_ENTRY *prof;
++  THD *thd= profiling->thd;
++  PROFILE_ENTRY *ps= &profile_start;
++  List<Item> field_list;
++  DBUG_ENTER("PROFILE::show");
++
++  field_list.push_back(new Item_empty_string("Status", MYSQL_ERRMSG_SIZE));
++  field_list.push_back(new Item_return_int("Time_elapsed", 20,
++                                           MYSQL_TYPE_LONGLONG));
++
++  if (options & PROFILE_CPU)
++  {
++    field_list.push_back(new Item_return_int("CPU_user", 20,
++                                             MYSQL_TYPE_LONGLONG));
++    field_list.push_back(new Item_return_int("CPU_system", 20, 
++                                             MYSQL_TYPE_LONGLONG));
++  }
++  
++  if (options & PROFILE_MEMORY)
++  {
++  }
++  
++  if (options & PROFILE_CONTEXT)
++  {
++    field_list.push_back(new Item_return_int("Context_voluntary", 10,
++                                             MYSQL_TYPE_LONG));
++    field_list.push_back(new Item_return_int("Context_involuntary", 10,
++                                             MYSQL_TYPE_LONG));
++  }
++
++  if (options & PROFILE_BLOCK_IO)
++  {
++    field_list.push_back(new Item_return_int("Block_ops_in", 10,
++                                             MYSQL_TYPE_LONG));
++    field_list.push_back(new Item_return_int("Block_ops_out", 10,
++                                             MYSQL_TYPE_LONG));
++  }
++  
++  if (options & PROFILE_IPC)
++  {
++    field_list.push_back(new Item_return_int("Messages_sent", 10,
++                                             MYSQL_TYPE_LONG));
++    field_list.push_back(new Item_return_int("Messages_received", 10,
++                                             MYSQL_TYPE_LONG));
++  }
++  
++  if (options & PROFILE_PAGE_FAULTS)
++  {
++    field_list.push_back(new Item_return_int("Page_faults_major", 10,
++                                             MYSQL_TYPE_LONG));
++    field_list.push_back(new Item_return_int("Page_faults_minor", 10,
++                                             MYSQL_TYPE_LONG));
++  }
++  
++  if (options & PROFILE_SWAPS)
++  {
++    field_list.push_back(new Item_return_int("Swaps", 10, MYSQL_TYPE_LONG));
++  }
++  
++  if(options & PROFILE_SOURCE)
++  {
++    field_list.push_back(new Item_empty_string("Source_function",
++                                               MYSQL_ERRMSG_SIZE));  
++    field_list.push_back(new Item_empty_string("Source_file",
++                                               MYSQL_ERRMSG_SIZE));
++    field_list.push_back(new Item_return_int("Source_line", 10,
++                                             MYSQL_TYPE_LONG));
++  }
++  
++  if (thd->protocol->send_fields(&field_list,
++                                 Protocol::SEND_NUM_ROWS | Protocol::SEND_EOF))
++    DBUG_RETURN(TRUE);
++
++  SELECT_LEX *sel= &thd->lex->select_lex;
++  SELECT_LEX_UNIT *unit= &thd->lex->unit;
++  ha_rows idx= 0;
++  Protocol *protocol=thd->protocol;
++
++  unit->set_limit(sel);
++
++  List_iterator<PROFILE_ENTRY> it(entries);
++  ulonglong last_time= ps->time;
++  while ((prof= it++))
++  {
++    if (++idx <= unit->offset_limit_cnt)
++      continue;
++    if (idx > unit->select_limit_cnt)
++      break;
++
++    protocol->prepare_for_resend();
++    protocol->store(prof->status, strlen(prof->status), system_charset_info);
++    protocol->store((ulonglong)(prof->time - ps->time)/10);
++
++    if (options & PROFILE_CPU)
++    {
++      protocol->store((ulonglong)RUSAGE_DIFF_USEC(prof->rusage.ru_utime,
++                                                  ps->rusage.ru_utime));
++      protocol->store((ulonglong)RUSAGE_DIFF_USEC(prof->rusage.ru_stime,
++                                                  ps->rusage.ru_stime));
++    }
++    
++    if (options & PROFILE_CONTEXT)
++    {
++      protocol->store((uint32)(prof->rusage.ru_nvcsw - ps->rusage.ru_nvcsw));
++      protocol->store((uint32)(prof->rusage.ru_nivcsw - ps->rusage.ru_nivcsw));
++    }
++
++    if (options & PROFILE_BLOCK_IO)
++    {
++      protocol->store((uint32)(prof->rusage.ru_inblock-ps->rusage.ru_inblock));
++      protocol->store((uint32)(prof->rusage.ru_oublock-ps->rusage.ru_oublock));
++    }
++    
++    if (options & PROFILE_IPC)
++    {
++      protocol->store((uint32)(prof->rusage.ru_msgsnd - ps->rusage.ru_msgsnd));
++      protocol->store((uint32)(prof->rusage.ru_msgrcv - ps->rusage.ru_msgrcv));
++    }
++    
++    if (options & PROFILE_PAGE_FAULTS)
++    {
++      protocol->store((uint32)(prof->rusage.ru_majflt - ps->rusage.ru_majflt));
++      protocol->store((uint32)(prof->rusage.ru_minflt - ps->rusage.ru_minflt));
++    }
++
++    if (options & PROFILE_SWAPS)
++    {
++      protocol->store((uint32)(prof->rusage.ru_nswap - ps->rusage.ru_nswap));
++    }
++    
++    if (options & PROFILE_SOURCE)
++    {
++      if(prof->function && prof->file)
++      {
++        protocol->store(prof->function, strlen(prof->function), system_charset_info);        
++        protocol->store(prof->file, strlen(prof->file), system_charset_info);
++        protocol->store(prof->line);
++      } else {
++        protocol->store("(unknown)", 10, system_charset_info);
++        protocol->store("(unknown)", 10, system_charset_info);
++        protocol->store((uint32) 0);
++      }
++    }
++
++    if (protocol->write())
++      DBUG_RETURN(TRUE);
++    last_time= prof->time;
++  }
++  send_eof(thd);
++  DBUG_RETURN(FALSE);
++}
++
++/* XXX: enabled should be set to the current global profiling setting */
++PROFILING::PROFILING()
++  :enabled(1), keeping(1), current(NULL), last(NULL)
++{
++  init_sql_alloc(&root,
++                 PROFILE_ALLOC_BLOCK_SIZE,
++                 PROFILE_ALLOC_PREALLOC_SIZE);
++}
++
++PROFILING::~PROFILING()
++{
++  free_root(&root, MYF(0));
++}
++
++void PROFILING::status(const char *status_arg,
++                       const char *function_arg,
++                       const char *file_arg, unsigned int line_arg)
++{
++  DBUG_ENTER("PROFILING::status");
++  
++  if(!current)
++    reset();
++
++  if(unlikely(enabled))
++    current->status(status_arg, function_arg, file_arg, line_arg);
++  
++  thd->proc_info= status_arg;
++  
++  DBUG_VOID_RETURN;
++}
++
++void PROFILING::store()
++{
++  MEM_ROOT *old_root;
++  DBUG_ENTER("PROFILING::store");
++
++  if (last && current && (last->query_id == current->query_id))
++    DBUG_VOID_RETURN;
++
++  if (history.elements > 10)  /* XXX: global/session var */
++  {
++    PROFILE *tmp= history.pop();
++    delete tmp;
++  }
++
++  old_root= thd->mem_root;
++  thd->mem_root= &root;
++  
++  if (current)
++  {
++    if (keeping && (!current->entries.is_empty())) {
++      last= current;
++      history.push_back(current);
++      current= NULL;
++    } else {
++      delete current;
++    }
++  }
++  
++  current= new PROFILE(this);
++  thd->mem_root= old_root;
++
++  DBUG_VOID_RETURN;
++}
++
++void PROFILING::reset()
++{
++  DBUG_ENTER("PROFILING::reset");
++
++  store();
++
++  current->reset();
++  /*free_root(&root, MYF(0));*/
++  keep();
++
++  DBUG_VOID_RETURN;
++}
++
++bool PROFILING::show_profiles()
++{
++  PROFILE *prof;
++  List<Item> field_list;
++  DBUG_ENTER("PROFILING::list_all");
++
++  field_list.push_back(new Item_return_int("Query_ID", 10,
++                                           MYSQL_TYPE_LONG));
++  field_list.push_back(new Item_return_int("Time", 20,
++                                           MYSQL_TYPE_LONGLONG));
++                                           
++  if (thd->protocol->send_fields(&field_list,
++                                 Protocol::SEND_NUM_ROWS | Protocol::SEND_EOF))
++    DBUG_RETURN(TRUE);
++    
++  SELECT_LEX *sel= &thd->lex->select_lex;
++  SELECT_LEX_UNIT *unit= &thd->lex->unit;
++  ha_rows idx= 0;
++  Protocol *protocol=thd->protocol;
++
++  unit->set_limit(sel);
++  
++  List_iterator<PROFILE> it(history);
++  while ((prof= it++))
++  {
++    PROFILE_ENTRY *ps= &prof->profile_start;
++    PROFILE_ENTRY *pe=  prof->profile_end;
++
++    if (++idx <= unit->offset_limit_cnt)
++      continue;
++    if (idx > unit->select_limit_cnt)
++      break;
++
++    protocol->prepare_for_resend();
++    protocol->store((uint32)(prof->query_id));
++    protocol->store((ulonglong)((pe->time - ps->time)/10));
++    
++    if (protocol->write())
++      DBUG_RETURN(TRUE);
++  }
++  send_eof(thd);
++  DBUG_RETURN(FALSE);
++}
++
++bool PROFILING::show(uint options, uint query_id)
++{
++  DBUG_ENTER("PROFILING::show");
++  PROFILE *prof;
++
++  List_iterator<PROFILE> it(history);
++  while ((prof= it++))
++  {
++    if(prof->query_id == query_id)
++      prof->show(options);
++  }
++
++  DBUG_RETURN(TRUE);
++}
++
++bool PROFILING::show_last(uint options)
++{
++  DBUG_ENTER("PROFILING::show_last");
++  if (!history.is_empty()) {
++    DBUG_RETURN(last->show(options));
++  }
++  DBUG_RETURN(TRUE);
++}
+--- /dev/null	2007-01-03 09:44:32.000000000 -0800
++++ sql/sql_profile.h	2006-04-26 17:08:54.000000000 -0700
+@@ -0,0 +1,187 @@
++/* Copyright (C) 2005 MySQL AB
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 2 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA */
++
++#ifndef SQL_PROFILE_H
++#define SQL_PROFILE_H
++
++#include <sys/time.h>
++#include <sys/resource.h>
++
++#if 1
++#define THD_PROC_INFO(thd, msg) if(unlikely((thd)->profiling.enabled)) { (thd)->profiling.status((msg), __FUNCTION__, __FILE__, __LINE__); } else { (thd)->proc_info= (msg); }
++#else
++#define THD_PROC_INFO(thd, msg) (thd)->proc_info= (msg);
++#endif
++
++#if 0
++
++     struct rusage {
++             struct timeval ru_utime; /* user time used */
++             struct timeval ru_stime; /* system time used */
++             long ru_maxrss;          /* integral max resident set size */
++             long ru_ixrss;           /* integral shared text memory size */
++             long ru_idrss;           /* integral unshared data size */
++             long ru_isrss;           /* integral unshared stack size */
++             long ru_minflt;          /* page reclaims */
++             long ru_majflt;          /* page faults */
++             long ru_nswap;           /* swaps */
++             long ru_inblock;         /* block input operations */
++             long ru_oublock;         /* block output operations */
++             long ru_msgsnd;          /* messages sent */
++             long ru_msgrcv;          /* messages received */
++             long ru_nsignals;        /* signals received */
++             long ru_nvcsw;           /* voluntary context switches */
++             long ru_nivcsw;          /* involuntary context switches */
++     };
++
++#endif
++
++#define PROFILE_NONE         0
++#define PROFILE_CPU          1
++#define PROFILE_MEMORY       2
++#define PROFILE_BLOCK_IO     4
++#define PROFILE_CONTEXT      8
++#define PROFILE_PAGE_FAULTS  16
++#define PROFILE_IPC          32
++#define PROFILE_SWAPS        64
++#define PROFILE_SOURCE       16384
++#define PROFILE_ALL          32767
++
++class PROFILE_ENTRY;
++class PROFILE;
++class PROFILING;
++
++/*
++  A single entry in a single profile.
++*/
++
++class PROFILE_ENTRY: public Sql_alloc
++{
++public:
++  PROFILE   *profile;
++  char      *status;
++  ulonglong time;
++  struct rusage rusage;
++
++  char *function;
++  char *file;
++  unsigned int line;
++  
++  PROFILE_ENTRY();
++  PROFILE_ENTRY(PROFILE *profile_arg, const char *status_arg);
++  PROFILE_ENTRY(PROFILE *profile_arg, const char *status_arg,
++                const char *function_arg,
++                const char *file_arg, unsigned int line_arg);
++  ~PROFILE_ENTRY();
++
++  void set_status(const char *status_arg);
++  void collect();
++};
++
++/*
++  The full profile for a single query.  Includes multiple PROFILE_ENTRY
++  objects.
++*/
++
++class PROFILE: public Sql_alloc
++{
++public:
++  PROFILING *profiling;
++  query_id_t query_id;
++  PROFILE_ENTRY profile_start;
++  PROFILE_ENTRY *profile_end;
++  List<PROFILE_ENTRY> entries;
++
++  PROFILE(PROFILING *profiling_arg);
++  ~PROFILE();
++
++  /* Add a profile status change to the current profile. */
++  void status(const char *status_arg,
++              const char *function_arg,
++              const char *file_arg, unsigned int line_arg);
++
++  /* Reset the contents of this profile entry. */
++  void reset();
++
++  /* Show this profile.  This is called by PROFILING. */
++  bool show(uint options);
++};
++
++/*
++  Profiling state for a single THD.  Contains multiple PROFILE objects.
++*/
++
++class PROFILING: public Sql_alloc
++{
++public:
++  MEM_ROOT root;
++  THD *thd;
++  bool enabled;
++  bool keeping;
++
++  PROFILE       *current;
++  PROFILE       *last;
++  List<PROFILE> history;
++
++  PROFILING();
++  ~PROFILING();
++
++  inline void set_thd(THD *thd_arg) { thd= thd_arg; };
++
++  /*
++    Should we try to collect profiling information at all?
++    
++    If we disable profiling, we cannot later decide to turn it back
++    on for the same query.
++  */
++  inline void enable()  { enabled= 1; };
++  inline void disable() { enabled= 0; };
++
++  /*
++    Do we intend to keep the currently collected profile?
++    
++    We don't keep profiles for some commands, such as SHOW PROFILE,
++    SHOW PROFILES, and some SQLCOM commands which aren't useful to
++    profile.  The keep() and discard() functions can be called many
++    times, only the final setting when the query finishes is used
++    to decide whether to discard the profile.
++    
++    The default is to keep the profile for all queries.
++  */
++  inline void keep()    { keeping= 1; };
++  inline void discard() { keeping= 0; };
++
++  void status(const char *status_arg,
++              const char *function_arg,
++              const char *file_arg, unsigned int line_arg);
++
++  /* Stash this profile in the profile history. */
++  void store();
++  
++  /* Reset the current profile and state of profiling for the next query. */
++  void reset();
++
++  /* SHOW PROFILES */
++  bool show_profiles();
++
++  /* SHOW PROFILE FOR QUERY query_id */
++  bool show(uint options, uint query_id);
++
++  /* SHOW PROFILE */
++  bool show_last(uint options);
++};
++
++#endif /* SQL_PROFILE_H */
+--- sql/sql_yacc.yy.orig	2006-04-25 15:02:34.000000000 -0700
++++ sql/sql_yacc.yy	2006-04-25 19:54:15.000000000 -0700
+@@ -162,6 +162,7 @@
+ %token  BIT_SYM
+ %token  BIT_XOR
+ %token  BLOB_SYM
++%token  BLOCK_SYM
+ %token  BOOLEAN_SYM
+ %token  BOOL_SYM
+ %token  BOTH
+@@ -203,10 +204,12 @@
+ %token  CONSISTENT_SYM
+ %token  CONSTRAINT
+ %token  CONTAINS_SYM
++%token  CONTEXT_SYM
+ %token  CONTINUE_SYM
+ %token  CONVERT_SYM
+ %token  CONVERT_TZ_SYM
+ %token  COUNT_SYM
++%token  CPU_SYM
+ %token  CREATE
+ %token  CROSS
+ %token  CUBE_SYM
+@@ -286,6 +289,7 @@
+ %token  EXTRACT_SYM
+ %token  FALSE_SYM
+ %token  FAST_SYM
++%token  FAULTS_SYM
+ %token  FETCH_SYM
+ %token  FIELD_FUNC
+ %token  FILE_SYM
+@@ -357,6 +361,8 @@
+ %token  INT_SYM
+ %token  INVOKER_SYM
+ %token  IN_SYM
++%token  IO_SYM
++%token  IPC_SYM
+ %token  IS
+ %token  ISOLATION
+ %token  ISSUER_SYM
+@@ -490,6 +496,7 @@
+ %token  OUTFILE
+ %token  OUT_SYM
+ %token  PACK_KEYS_SYM
++%token  PAGE_SYM
+ %token  PARSER_SYM
+ %token  PARTIAL
+ %token  PARTITION_SYM
+@@ -514,6 +521,8 @@
+ %token  PROCEDURE
+ %token  PROCESS
+ %token  PROCESSLIST_SYM
++%token  PROFILE_SYM
++%token  PROFILES_SYM
+ %token  PURGE
+ %token  QUARTER_SYM
+ %token  QUERY_SYM
+@@ -588,6 +597,7 @@
+ %token  SMALLINT
+ %token  SNAPSHOT_SYM
+ %token  SONAME_SYM
++%token  SOURCE_SYM
+ %token  SOUNDS_SYM
+ %token  SPATIAL_SYM
+ %token  SPECIFIC_SYM
+@@ -622,6 +632,8 @@
+ %token  SUM_SYM
+ %token  SUPER_SYM
+ %token  SUSPEND_SYM
++%token  SWAPS_SYM
++%token  SWITCHES_SYM
+ %token  SYSDATE
+ %token  TABLES
+ %token  TABLESPACE
+@@ -755,7 +767,7 @@
+         ev_alter_on_schedule_completion opt_ev_rename_to opt_ev_sql_stmt
+ 
+ %type <ulong_num>
+-	ulong_num merge_insert_types
++	ulong_num merge_insert_types opt_profile_query_arg
+ 
+ %type <ulonglong_number>
+ 	ulonglong_num size_number
+@@ -7969,6 +7981,48 @@
+ 	/* empty */
+ 	| TABLE_SYM;
+ 
++opt_profile_defs:
++  /* empty */
++  | profile_defs
++
++profile_defs:
++  profile_def
++  | profile_defs ',' profile_defs
++
++profile_def:
++  CPU_SYM
++    { Lex->profile_options|= PROFILE_CPU; }
++  | MEMORY_SYM
++    { Lex->profile_options|= PROFILE_MEMORY; }
++  | BLOCK_SYM IO_SYM
++    { Lex->profile_options|= PROFILE_BLOCK_IO; }
++  | CONTEXT_SYM SWITCHES_SYM
++    { Lex->profile_options|= PROFILE_CONTEXT; }
++  | PAGE_SYM FAULTS_SYM
++    { Lex->profile_options|= PROFILE_PAGE_FAULTS; }
++  | IPC_SYM
++    { Lex->profile_options|= PROFILE_IPC; }
++  | SWAPS_SYM
++    { Lex->profile_options|= PROFILE_SWAPS; }
++  | SOURCE_SYM
++    { Lex->profile_options|= PROFILE_SOURCE; }
++  | ALL
++    { Lex->profile_options|= PROFILE_ALL; }
++  ;
++
++opt_profile_query_arg:
++  /* empty */
++    { $$= 0; }
++  | QUERY_SYM NUM
++    { $$= atoi($2.str); }
++  ;
++
++opt_profile_args:
++  /* empty */
++  | FOR_SYM opt_profile_query_arg
++    { Lex->profile_query_id = $2; }
++  ;
++
+ /* Show things */
+ 
+ show:	SHOW
+@@ -8141,6 +8195,10 @@
+           { Lex->sql_command = SQLCOM_SHOW_WARNS;}
+         | ERRORS opt_limit_clause_init
+           { Lex->sql_command = SQLCOM_SHOW_ERRORS;}
++        | PROFILES_SYM
++          { Lex->sql_command = SQLCOM_SHOW_PROFILES; }
++        | PROFILE_SYM opt_profile_defs opt_profile_args opt_limit_clause_init
++          { Lex->sql_command = SQLCOM_SHOW_PROFILE; }
+         | opt_var_type STATUS_SYM wild_and_where
+           {
+             LEX *lex= Lex;
+@@ -9277,6 +9335,7 @@
+ 	| BERKELEY_DB_SYM	{}
+ 	| BINLOG_SYM		{}
+ 	| BIT_SYM		{}
++	| BLOCK_SYM {}
+ 	| BOOL_SYM		{}
+ 	| BOOLEAN_SYM		{}
+ 	| BTREE_SYM		{}
+@@ -9295,6 +9354,8 @@
+ 	| COMPRESSED_SYM	{}
+ 	| CONCURRENT		{}
+ 	| CONSISTENT_SYM	{}
++	| CONTEXT_SYM     {}
++	| CPU_SYM     {}
+ 	| CUBE_SYM		{}
+ 	| DATA_SYM		{}
+ 	| DATAFILE_SYM          {}
+@@ -9324,6 +9385,7 @@
+ 	| EXTENDED_SYM		{}
+ 	| EXTENT_SIZE_SYM       {}
+ 	| FAST_SYM		{}
++	| FAULTS_SYM  {}
+ 	| FOUND_SYM		{}
+ 	| ENABLE_SYM		{}
+ 	| FULL			{}
+@@ -9348,6 +9410,8 @@
+ 	| ISSUER_SYM		{}
+ 	| INNOBASE_SYM		{}
+ 	| INSERT_METHOD		{}
++	| IO_SYM          {}
++	| IPC_SYM         {}
+ 	| RELAY_THREAD		{}
+ 	| LAST_SYM		{}
+ 	| LEAVES                {}
+@@ -9411,6 +9475,7 @@
+ 	| ONE_SHOT_SYM		{}
+         | ONE_SYM               {}
+ 	| PACK_KEYS_SYM		{}
++	| PAGE_SYM        {}
+ 	| PARTIAL		{}
+ 	| PARTITIONING_SYM	{}
+ 	| PARTITIONS_SYM	{}
+@@ -9425,6 +9490,8 @@
+         | PRIVILEGES            {}
+ 	| PROCESS		{}
+ 	| PROCESSLIST_SYM	{}
++	| PROFILE_SYM {}
++	| PROFILES_SYM {}
+ 	| QUARTER_SYM		{}
+ 	| QUERY_SYM		{}
+ 	| QUICK			{}
+@@ -9458,6 +9525,7 @@
+ 	| SHUTDOWN		{}
+ 	| SNAPSHOT_SYM		{}
+ 	| SOUNDS_SYM		{}
++	| SOURCE_SYM    {}
+ 	| SQL_CACHE_SYM		{}
+ 	| SQL_BUFFER_RESULT	{}
+ 	| SQL_NO_CACHE_SYM	{}
+@@ -9472,6 +9540,8 @@
+ 	| SUBPARTITIONS_SYM	{}
+ 	| SUPER_SYM		{}
+         | SUSPEND_SYM           {}
++  | SWAPS_SYM           {}
++	| SWITCHES_SYM    {}
+         | TABLES                {}
+ 	| TABLESPACE		{}
+ 	| TEMPORARY		{}

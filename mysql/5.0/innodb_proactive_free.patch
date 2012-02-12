@@ -1,0 +1,319 @@
+diff -Naur mysql-5.0.51a/innobase/buf/buf0lru.c mysql-5.0.51a.proactive/innobase/buf/buf0lru.c
+--- mysql-5.0.51a/innobase/buf/buf0lru.c	2008-01-11 06:43:38.000000000 -0800
++++ mysql-5.0.51a.proactive/innobase/buf/buf0lru.c	2008-02-07 14:26:59.000000000 -0800
+@@ -281,7 +281,69 @@
+ 	
+ 	return(freed);
+ }
+-	
++
++/*
++Try and free n_blocks blocks to the free list.*/
++
++ulint
++buf_LRU_search_and_free_n_blocks(
++/*==========================*/
++/* out: number of blocks freed */
++  ulint	n_blocks)   /* in: how many blocks to free */
++{
++  buf_block_t *block;
++
++  ulint tried = 0;
++  ulint freed = 0;
++
++  mutex_enter(&(buf_pool->mutex));
++
++  while (freed < n_blocks)
++  {
++    if((block = UT_LIST_GET_LAST(buf_pool->LRU)) == NULL)
++      break;
++
++    ut_a(block->in_LRU_list);
++
++    tried++;
++
++    mutex_enter(&block->mutex);
++
++    if (buf_flush_ready_for_replace(block)) {
++
++      buf_LRU_block_remove_hashed_page(block);
++
++			mutex_exit(&block->mutex);
++			mutex_exit(&(buf_pool->mutex));
++
++      if (block->frame) {
++        btr_search_drop_page_hash_index(block->frame);
++      }
++
++      ut_a(block->buf_fix_count == 0);
++
++			mutex_enter(&(buf_pool->mutex));
++			mutex_enter(&block->mutex);
++
++      buf_LRU_block_free_hashed_page(block);
++
++      freed++;
++    }
++  
++    mutex_exit(&block->mutex);
++  
++    if (tried > (n_blocks * 2) || (tried >= (buf_pool->curr_size / 2)))
++      break;
++
++  }
++
++  buf_pool->LRU_flush_ended = 0;
++  mutex_exit(&(buf_pool->mutex));
++  
++  return(freed);
++}
++
++
+ /**********************************************************************
+ Tries to remove LRU flushed blocks from the end of the LRU list and put them
+ to the free list. This is beneficial for the efficiency of the insert buffer
+diff -Naur mysql-5.0.51a/innobase/include/srv0srv.h mysql-5.0.51a.proactive/innobase/include/srv0srv.h
+--- mysql-5.0.51a/innobase/include/srv0srv.h	2008-01-11 06:43:37.000000000 -0800
++++ mysql-5.0.51a.proactive/innobase/include/srv0srv.h	2008-02-05 21:17:20.000000000 -0800
+@@ -127,6 +127,10 @@
+ extern ibool    srv_set_thread_priorities;
+ extern int      srv_query_thread_priority;
+ 
++extern ulonglong srv_buffer_pool_proactive_free_size;
++extern ulonglong srv_buffer_pool_proactive_free_chunk;
++extern ulong srv_buffer_pool_proactive_free_interval;
++
+ extern ulong	srv_max_buf_pool_modified_pct;
+ extern ulong	srv_max_purge_lag;
+ extern ibool	srv_use_awe;
+@@ -473,6 +477,18 @@
+ 			/* out: a dummy parameter */
+ 	void*	arg);	/* in: a dummy parameter required by
+ 			os_thread_create */
++
++#ifndef __WIN__
++void*
++#else
++ulint
++#endif
++srv_buffer_pool_proactive_thread(
++/*=====================*/
++			/* out: a dummy parameter */
++	void*	arg);	/* in: a dummy parameter required by
++			os_thread_create */
++
+ /**********************************************************************
+ Outputs to a file the output of the InnoDB Monitor. */
+ 
+diff -Naur mysql-5.0.51a/innobase/srv/srv0srv.c mysql-5.0.51a.proactive/innobase/srv/srv0srv.c
+--- mysql-5.0.51a/innobase/srv/srv0srv.c	2008-01-11 06:43:19.000000000 -0800
++++ mysql-5.0.51a.proactive/innobase/srv/srv0srv.c	2008-02-06 12:20:51.000000000 -0800
+@@ -41,6 +41,9 @@
+ #include "lock0lock.h"
+ #include "trx0purge.h"
+ #include "ibuf0ibuf.h"
++#include "buf0types.h"
++#include "buf0buf.h"
++#include "buf0lru.h"
+ #include "buf0flu.h"
+ #include "btr0sea.h"
+ #include "dict0load.h"
+@@ -187,6 +190,10 @@
+ 
+ ulong	srv_max_buf_pool_modified_pct	= 90;
+ 
++ulonglong srv_buffer_pool_proactive_free_size  = 0;
++ulonglong srv_buffer_pool_proactive_free_chunk = 0;
++ulong srv_buffer_pool_proactive_free_interval  = 1000;
++
+ /* variable counts amount of data read in total (in bytes) */
+ ulint srv_data_read = 0;
+ 
+@@ -2124,6 +2131,87 @@
+ #endif
+ }
+ 
++/*
++  A thread to keep a portion of the buffer pool free.
++*/
++
++#ifndef __WIN__
++void*
++#else
++ulint
++#endif
++srv_buffer_pool_proactive_thread(
++/*=====================*/
++/* out: a dummy parameter */
++	void*	arg __attribute__((unused)))
++/* in: a dummy parameter required by
++			os_thread_create */
++{
++  ulint free_blocks, threshold, blocks_to_free;
++
++  ulint target_blocks, chunk_blocks;
++
++#ifdef UNIV_DEBUG_THREAD_CREATION
++  fprintf(stderr, "Buffer pool proactive free thread starts, id %lu\n",
++            os_thread_pf(os_thread_get_curr_id()));
++  fflush(stderr);
++#endif
++
++  /*
++    Sleep for 5 seconds in order to give the buffer pool a chance to
++    completely come up before we try to enforce the threshold.
++  */
++  os_thread_sleep(5000000);
++
++  while (srv_shutdown_state < SRV_SHUTDOWN_CLEANUP) 
++  {
++    os_thread_sleep(1000 * srv_buffer_pool_proactive_free_interval);
++  
++    /*
++      If _size is not configured, loop and wait for the user to dynamically
++      configure it using SET GLOBAL.
++      
++      Note that if _size is 0 and _interval is small, this loop could be
++      quite tight and burn up a lot of CPU.  Don't do that.
++    */
++    if(!srv_buffer_pool_proactive_free_size)
++      continue;
++
++    /* Target size of free space in blocks */
++    target_blocks = srv_buffer_pool_proactive_free_size / UNIV_PAGE_SIZE;
++    
++    /* Number of blocks to free in a single pass */
++    chunk_blocks  = srv_buffer_pool_proactive_free_chunk / UNIV_PAGE_SIZE;
++    
++    /* Current number of free blocks */
++    free_blocks   = UT_LIST_GET_LEN(buf_pool->free);
++
++    /* Try to free all blocks to get to our target */  
++    blocks_to_free = target_blocks - free_blocks;
++    
++    /* Unless a chunk has been configured, then limit ... */
++    if(chunk_blocks && (blocks_to_free > chunk_blocks))
++    {
++      blocks_to_free= chunk_blocks;
++    }
++  
++    if(free_blocks < target_blocks)
++    {
++      /* Free blocks to the free list */
++      buf_LRU_search_and_free_n_blocks(blocks_to_free);
++    }
++  }
++
++  os_thread_exit(NULL);
++
++#ifndef __WIN__
++  return(NULL);
++#else
++  return(0);
++#endif
++}
++
++
+ /***********************************************************************
+ Tells the InnoDB server that there has been activity in the database
+ and wakes up the master thread if it is suspended (not sleeping). Used
+diff -Naur mysql-5.0.51a/innobase/srv/srv0start.c mysql-5.0.51a.proactive/innobase/srv/srv0start.c
+--- mysql-5.0.51a/innobase/srv/srv0start.c	2008-01-11 06:43:14.000000000 -0800
++++ mysql-5.0.51a.proactive/innobase/srv/srv0start.c	2008-02-05 17:59:46.000000000 -0800
+@@ -1554,6 +1554,9 @@
+ 	srv_was_started = TRUE;
+ 	srv_is_being_started = FALSE;
+ 
++	os_thread_create(&srv_buffer_pool_proactive_thread, NULL,
++				thread_ids + 4 + SRV_MAX_N_IO_THREADS);	
++
+         if (trx_doublewrite == NULL) {
+ 		/* Create the doublewrite buffer to a new tablespace */
+ 
+diff -Naur mysql-5.0.51a/sql/ha_innodb.h mysql-5.0.51a.proactive/sql/ha_innodb.h
+--- mysql-5.0.51a/sql/ha_innodb.h	2008-01-11 06:43:39.000000000 -0800
++++ mysql-5.0.51a.proactive/sql/ha_innodb.h	2008-02-07 10:14:31.000000000 -0800
+@@ -224,6 +224,9 @@
+ 					    flushing the buffer pool: this
+ 					    is equivalent to a 'crash' */
+ extern "C" {
++extern ulonglong srv_buffer_pool_proactive_free_size;
++extern ulonglong srv_buffer_pool_proactive_free_chunk;
++extern ulong srv_buffer_pool_proactive_free_interval;
+ extern ulong srv_max_buf_pool_modified_pct;
+ extern ulong srv_max_purge_lag;
+ extern ulong srv_auto_extend_increment;
+diff -Naur mysql-5.0.51a/sql/mysqld.cc mysql-5.0.51a.proactive/sql/mysqld.cc
+--- mysql-5.0.51a/sql/mysqld.cc	2008-01-11 06:43:18.000000000 -0800
++++ mysql-5.0.51a.proactive/sql/mysqld.cc	2008-02-07 10:38:16.000000000 -0800
+@@ -4783,6 +4783,9 @@
+   OPT_INNODB_SYNC_SPIN_LOOPS,
+   OPT_INNODB_CONCURRENCY_TICKETS,
+   OPT_INNODB_THREAD_SLEEP_DELAY,
++  OPT_INNODB_BUFFER_POOL_PROACTIVE_FREE_SIZE,
++  OPT_INNODB_BUFFER_POOL_PROACTIVE_FREE_CHUNK,
++  OPT_INNODB_BUFFER_POOL_PROACTIVE_FREE_INTERVAL,
+   OPT_BDB_CACHE_SIZE,
+   OPT_BDB_LOG_BUFFER_SIZE,
+   OPT_BDB_MAX_LOCK,
+@@ -5046,6 +5049,18 @@
+    (gptr*) &opt_innodb, (gptr*) &opt_innodb, 0, GET_BOOL, NO_ARG, OPT_INNODB_DEFAULT, 0, 0,
+    0, 0, 0},
+ #ifdef HAVE_INNOBASE_DB
++  {"innodb_buffer_pool_proactive_free_size", 
++   OPT_INNODB_BUFFER_POOL_PROACTIVE_FREE_SIZE,
++   "Amount of buffer pool to proactively keep free (in bytes).", (gptr*) &srv_buffer_pool_proactive_free_size,
++   (gptr*) &srv_buffer_pool_proactive_free_size, 0, GET_LL, REQUIRED_ARG, 0, 0, LONGLONG_MAX, 0, 1024*1024L, 0},
++  {"innodb_buffer_pool_proactive_free_interval", 
++   OPT_INNODB_BUFFER_POOL_PROACTIVE_FREE_INTERVAL,
++   "Interval to proactively free pages in buffer pool (in ms).", (gptr*) &srv_buffer_pool_proactive_free_interval,
++   (gptr*) &srv_buffer_pool_proactive_free_interval, 0, GET_ULONG, REQUIRED_ARG, 1000, 1, 86400000, 0, 0, 0},
++  {"innodb_buffer_pool_proactive_free_chunk", 
++   OPT_INNODB_BUFFER_POOL_PROACTIVE_FREE_CHUNK,
++   "Amount to free each innodb_buffer_pool_proactive_free_interval (in bytes).", (gptr*) &srv_buffer_pool_proactive_free_chunk,
++   (gptr*) &srv_buffer_pool_proactive_free_chunk, 0, GET_LL, REQUIRED_ARG, 1*1024*1024L, 0, LONGLONG_MAX, 0, 16*1024L, 0},
+   {"innodb_checksums", OPT_INNODB_CHECKSUMS, "Enable InnoDB checksums validation (enabled by default). \
+ Disable with --skip-innodb-checksums.", (gptr*) &innobase_use_checksums,
+    (gptr*) &innobase_use_checksums, 0, GET_BOOL, NO_ARG, 1, 0, 0, 0, 0, 0},
+diff -Naur mysql-5.0.51a/sql/set_var.cc mysql-5.0.51a.proactive/sql/set_var.cc
+--- mysql-5.0.51a/sql/set_var.cc	2008-01-11 06:43:29.000000000 -0800
++++ mysql-5.0.51a.proactive/sql/set_var.cc	2008-02-05 22:30:24.000000000 -0800
+@@ -455,6 +455,15 @@
+ sys_var_long_ptr  sys_innodb_flush_log_at_trx_commit(
+                                         "innodb_flush_log_at_trx_commit",
+                                         &srv_flush_log_at_trx_commit);
++sys_var_ulonglong_ptr  sys_innodb_buffer_pool_proactive_free_size(
++                    "innodb_buffer_pool_proactive_free_size",
++                    &srv_buffer_pool_proactive_free_size);
++sys_var_ulonglong_ptr  sys_innodb_buffer_pool_proactive_free_chunk(
++                    "innodb_buffer_pool_proactive_free_chunk",
++                    &srv_buffer_pool_proactive_free_chunk);
++sys_var_long_ptr  sys_innodb_buffer_pool_proactive_free_interval(
++                    "innodb_buffer_pool_proactive_free_interval",
++                    &srv_buffer_pool_proactive_free_interval);
+ #endif
+ 
+ /* Condition pushdown to storage engine */
+@@ -802,6 +811,9 @@
+   &sys_innodb_thread_concurrency,
+   &sys_innodb_commit_concurrency,
+   &sys_innodb_flush_log_at_trx_commit,
++  &sys_innodb_buffer_pool_proactive_free_size,
++  &sys_innodb_buffer_pool_proactive_free_chunk,
++  &sys_innodb_buffer_pool_proactive_free_interval,
+ #endif
+   &sys_trust_routine_creators,
+   &sys_trust_function_creators,
+@@ -905,6 +917,12 @@
+   {"innodb_additional_mem_pool_size", (char*) &innobase_additional_mem_pool_size, SHOW_LONG },
+   {sys_innodb_autoextend_increment.name, (char*) &sys_innodb_autoextend_increment, SHOW_SYS},
+   {"innodb_buffer_pool_awe_mem_mb", (char*) &innobase_buffer_pool_awe_mem_mb, SHOW_LONG },
++  {sys_innodb_buffer_pool_proactive_free_chunk.name,
++   (char*) &sys_innodb_buffer_pool_proactive_free_chunk, SHOW_SYS},  
++  {sys_innodb_buffer_pool_proactive_free_interval.name,
++   (char*) &sys_innodb_buffer_pool_proactive_free_interval, SHOW_SYS},
++  {sys_innodb_buffer_pool_proactive_free_size.name,
++   (char*) &sys_innodb_buffer_pool_proactive_free_size, SHOW_SYS},
+   {"innodb_buffer_pool_size", (char*) &innobase_buffer_pool_size, SHOW_LONGLONG },
+   {"innodb_checksums", (char*) &innobase_use_checksums, SHOW_MY_BOOL},
+   {sys_innodb_commit_concurrency.name, (char*) &sys_innodb_commit_concurrency, SHOW_SYS},
